@@ -1,14 +1,9 @@
-from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sqlite3
 import uuid
-
-TZ = timezone(timedelta(hours=8))
-
-
-def now():
-    return datetime.now(TZ).isoformat(timespec="seconds")
+from .timeutil import TZ, now, format_shanghai_time
+from .logformat import LogFormatter
 
 
 class Store:
@@ -17,6 +12,7 @@ class Store:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.scope = scope
         self.secrets = [s for s in secrets if s]
+        self.log_formatter = LogFormatter()
         self.db = sqlite3.connect(self.directory / "ctptest.sqlite3")
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
@@ -73,8 +69,10 @@ class Store:
                 "(scope,day,at,run_id,case_id,category,kind,payload,dedupe) VALUES (?,?,?,?,?,?,?,?,?)",
                 (self.scope, day, event["at"], run_id, case_id, category, kind, text, dedupe))
         if cursor.rowcount:
-            with (self.directory / "ctptest.log").open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+            line = self.log_formatter.format_event(event)
+            if line:
+                with (self.directory / "ctptest.log").open("a", encoding="utf-8") as stream:
+                    stream.write(line + "\n")
         return event
 
     def count(self, day, kind):

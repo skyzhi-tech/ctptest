@@ -35,7 +35,6 @@ class Worker(threading.Thread):
             try:
                 secrets = self.secrets_loader(self.config)
                 store.secrets = [value for value in [*secrets.values(), self.config.user_id] if value]
-                self.emit("fault", {"message": "正在连接并同步测试柜台…"})
                 adapter = self.adapter_factory(self.config, secrets)
                 engine = Engine(self.config, store, adapter, self.emit, self.stop_test)
             except Exception as error:
