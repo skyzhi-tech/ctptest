@@ -1,5 +1,6 @@
 import queue
 import threading
+import uuid
 
 from .adapter import ExsdkAdapter
 from .config import load_secrets
@@ -9,9 +10,10 @@ from .locking import InstanceLock
 
 
 class Worker(threading.Thread):
-    def __init__(self, config, output, adapter_factory=ExsdkAdapter, secrets_loader=load_secrets):
+    def __init__(self, config, output, adapter_factory=ExsdkAdapter, secrets_loader=load_secrets, session_id=None):
         super().__init__(name="ctptest-trading", daemon=True)
         self.config = config
+        self.session_id = session_id or uuid.uuid4().hex
         self.output = output
         self.commands = queue.Queue()
         self.stop_test = threading.Event()
@@ -29,7 +31,7 @@ class Worker(threading.Thread):
         try:
             lock = InstanceLock(self.config.log_dir, self.config.scope)
             # History is available even when credentials or the network fail.
-            store = Store(self.config.log_dir, self.config.scope)
+            store = Store(self.config.log_dir, self.config.scope, session_id=self.session_id)
             self.redact = store.clean
             self.emit("history", store.history())
             try:

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import uuid
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -40,7 +41,7 @@ class Settings(tk.Toplevel):
     def __init__(self, app):
         super().__init__(app.root)
         self.app = app
-        self.title("首次配置 / 测试环境设置")
+        self.title("配置")
         self.transient(app.root)
         self.grab_set()
         self.vars = {}
@@ -76,7 +77,7 @@ class Settings(tk.Toplevel):
         bar = ttk.Frame(self, padding=(20, 12))
         bar.grid(row=2, column=0, sticky="ew")
         ttk.Button(bar, text="取消", command=self.destroy).pack(side="right", padx=8)
-        ttk.Button(bar, text="保存并连接", command=self.save).pack(side="right")
+        ttk.Button(bar, text="保存", command=self.save).pack(side="right")
         # Reserve room for either tab, including expanded parameters, once.
         # Tab changes must not override the user's window size or position.
         self.advanced.grid(row=3, column=0, columnspan=2, sticky="ew")
@@ -134,9 +135,8 @@ class Settings(tk.Toplevel):
             if isinstance(error, ConfigValidationError):
                 self.focus_field(error.field)
             return
-        self.app.config = config
+        self.app.apply_saved_config(config)
         self.destroy()
-        self.app.reconnect()
 
     def focus_field(self, name):
         entry = self.entries.get(name)
@@ -158,13 +158,20 @@ class Application:
     def __init__(self, root, config_path, worker_factory=Worker, autoconnect=True):
         self.root, self.config_path = root, Path(config_path)
         self.worker_factory = worker_factory
+        self.session_id = uuid.uuid4().hex
         self.output = queue.Queue()
         self.worker = None
-        self.pending_reconnect = False
+        self.disconnecting = False
+        self.config_pending = False
+        self.active_config = None
         self.closing = False
         self.destroyed = False
         self.drain_after = None
         self.setup_after = None
+        self.loading_after = None
+        self.loading_text = ""
+        self.loading_suffix = ""
+        self.loading_dots = 1
         self.busy = False
         self.stop_requested = False
         self.available = False
@@ -190,7 +197,7 @@ class Application:
         self.drain_after = root.after(80, self.drain)
         if autoconnect:
             if self.config.credential_ref and not self.config_error:
-                self.reconnect()
+                self.connect()
             else:
                 self.setup_after = root.after(150, self.first_setup)
 
@@ -208,22 +215,24 @@ class Application:
         toolbar.grid(row=0, column=0, sticky="ew")
         self.status_var = tk.StringVar(value="未连接")
         ttk.Label(toolbar, textvariable=self.status_var).pack(side="left")
-        self.settings_button = ttk.Button(toolbar, text="连接设置", command=self.settings)
+        self.settings_button = ttk.Button(toolbar, text="配置", command=self.settings)
         self.settings_button.pack(side="right", padx=(4, 0))
+        self.connect_button = ttk.Button(toolbar, text="连接", command=self.toggle_connection)
+        self.connect_button.pack(side="right", padx=4)
         self.resume_button = ttk.Button(toolbar, text="恢复交易", command=self.resume_trading)
 
         body = ttk.Panedwindow(self.root, orient="horizontal")
         body.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 4))
-        left = ttk.Frame(body, padding=4, width=290)
+        left = ttk.Frame(body, padding=4, width=250)
         right = ttk.Frame(body, padding=(8, 0, 0, 0))
         body.add(left, weight=0)
         body.add(right, weight=1)
-        body.bind("<Map>", lambda _event: body.sashpos(0, 290))
+        body.bind("<Map>", lambda _event: body.sashpos(0, 250))
         left.columnconfigure(0, weight=1)
         left.rowconfigure(0, weight=1)
         navigation = ttk.Frame(left)
         navigation.grid(row=0, column=0, sticky="nsew")
-        self.tree = ttk.Treeview(navigation, columns=("state",), show="tree", selectmode="browse")
+        self.tree = ttk.Treeview(navigation, columns=("state",), displaycolumns=(), show="tree", selectmode="browse")
         self.tree.column("#0", width=180, minwidth=140)
         self.tree.column("state", width=90, minwidth=85, stretch=False)
         scroll = ttk.Scrollbar(navigation, orient="vertical", command=self.tree.yview)
@@ -233,38 +242,47 @@ class Application:
         for case in CASES:
             if not self.tree.exists(case.group):
                 self.tree.insert("", "end", iid=case.group, text=case.group.partition(" ")[2], open=True)
-            self.tree.insert(case.group, "end", iid=str(case.id), text=case.title, values=("未执行",))
+            self.tree.insert(case.group, "end", iid=str(case.id), text=case.title, values=("",))
         self.tree.bind("<<TreeviewSelect>>", self.view_selection)
-        self.progress_var = tk.StringVar(value=f"共 {len(CASES)} 项，通过 0 项")
-        ttk.Label(left, textvariable=self.progress_var).grid(row=1, column=0, sticky="w", pady=(4, 0))
 
         right.columnconfigure(0, weight=1)
         right.rowconfigure(1, weight=1)
-        result = ttk.Frame(right, padding=8)
+        result = self.result_frame = ttk.Frame(right, padding=8)
         result.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        result.grid_remove()
         result.columnconfigure(0, weight=1)
         heading = ttk.Frame(result)
         heading.grid(row=0, column=0, sticky="ew")
         self.action_button = ttk.Button(heading, text="开始", command=self.toggle_test, state="disabled")
         self.action_button.pack(side="right", padx=(8, 0))
-        self.result_label = ttk.Label(heading, text="待选择")
+        self.result_label = ttk.Label(heading, text="")
         self.result_label.pack(side="right")
-        self.title_var = tk.StringVar(value="请选择测试点")
+        self.title_var = tk.StringVar(value="")
         title = ttk.Label(heading, textvariable=self.title_var, style="Header.TLabel")
         title.pack(side="left", fill="x", expand=True)
-        records = ttk.Frame(right, padding=4)
+        self.empty_label = ttk.Label(right, text="从左侧选择测试点", anchor="center")
+        self.empty_label.grid(row=1, column=0, sticky="nsew")
+        records = self.records_frame = ttk.Frame(right, padding=4)
         records.grid(row=1, column=0, sticky="nsew")
+        records.grid_remove()
         self.text = tk.Text(records, wrap="word", height=6, font=("Microsoft YaHei UI", 9),
-                            relief="sunken", borderwidth=1, padx=4, pady=4, state="disabled")
+                            relief="flat", borderwidth=0, padx=8, pady=8, state="disabled")
         scrollbar = ttk.Scrollbar(records, command=self.text.yview)
         self.text.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
         self.text.pack(fill="both", expand=True)
         self.wrap_labels = [title]
         right.bind("<Configure>", self.resize_content)
+        footer = ttk.Frame(self.root, padding=(8, 4))
+        footer.grid(row=2, column=0, sticky="ew")
+        self.connection_hint = ttk.Frame(footer)
+        self.connection_hint.pack(side="left", padx=(0, 16))
+        self.connection_hint_var = tk.StringVar(value="")
+        ttk.Label(self.connection_hint, textvariable=self.connection_hint_var).pack(side="left")
         self.footer_var = tk.StringVar(value="")
-        ttk.Label(self.root, textvariable=self.footer_var, padding=(8, 4), wraplength=1050).grid(
-            row=2, column=0, sticky="ew")
+        self.footer_label = ttk.Label(footer, textvariable=self.footer_var, wraplength=1050)
+        self.footer_label.pack(side="left", fill="x", expand=True)
+        self.update_connection_status()
 
     def resize_content(self, event):
         width = max(240, event.width - 32)
@@ -283,37 +301,123 @@ class Application:
         self.settings()
 
     def settings(self):
-        if self.busy or self.closing or self.destroyed:
+        if self.busy or self.disconnecting or self.closing or self.destroyed:
             return
         Settings(self)
 
-    def reconnect(self):
+    def apply_saved_config(self, config):
+        self.config = config
+        self.config_error = None
+        self.config_pending = self.worker is not None
+        if not self.config_pending:
+            self.available = False
+            self.active_config = None
+            self.last_status = {}
+        self.update_connection_status()
+        self.buttons()
+
+    def update_connection_status(self):
+        profile = self.active_config or self.config
+        status = self.last_status.get("connection", "未连接")
+        waiting_day = status == "READY" and not self.last_status.get("day")
+        connecting = self.worker is not None and not self.closing and (
+            self.disconnecting or status in {"CONNECTING", "SYNCING"} or waiting_day)
+        hint = {"CONNECTING": "正在连接柜台", "SYNCING": "正在登录并同步"}.get(status, "")
+        label = {"CONNECTING": "连接中", "SYNCING": "同步中",
+                 "READY": "已连接", "ERROR": "连接异常", "DISCONNECTED": "连接已断开"}.get(status, status)
+        if self.disconnecting:
+            label, hint = "断开中", "正在断开连接"
+        elif waiting_day:
+            label, hint = "同步中", "正在同步交易日"
+        parts = [profile.environment]
+        if profile.user_id:
+            parts.append(f"账号 {profile.user_id}")
+        if self.last_status.get("day"):
+            parts.append(f"交易日 {self.last_status['day']}")
+        connection_text = hint if connecting else label
+        suffix = ""
+        if self.config_pending:
+            suffix = " · 配置待应用，断开后连接生效"
+        elif self.last_status.get("paused"):
+            suffix = " · 交易已暂停"
+        if connecting:
+            if self.loading_text != connection_text:
+                self.loading_dots = 1
+            self.loading_text, self.loading_suffix = connection_text, suffix
+            self.connection_hint_var.set(connection_text + "." * self.loading_dots + suffix)
+            if self.loading_after is None:
+                self.loading_after = self.root.after(400, self.animate_loading)
+        else:
+            self.cancel_callback("loading_after")
+            self.loading_text = ""
+            self.loading_suffix = ""
+            self.connection_hint_var.set(connection_text + suffix)
+        self.status_var.set("    ".join(parts))
+
+    def animate_loading(self):
+        self.loading_after = None
+        if self.closing or self.destroyed or not self.loading_text:
+            return
+        self.loading_dots = self.loading_dots % 3 + 1
+        self.connection_hint_var.set(self.loading_text + "." * self.loading_dots + self.loading_suffix)
+        self.loading_after = self.root.after(400, self.animate_loading)
+
+    def ready_for_tests(self):
+        return (self.worker is not None and self.available and not self.disconnecting
+                and not self.config_pending and not self.closing and not self.destroyed
+                and self.last_status.get("connection") == "READY" and bool(self.last_status.get("day")))
+
+    def toggle_connection(self):
+        if self.busy or self.disconnecting or self.closing or self.destroyed:
+            return
+        if self.worker is not None:
+            self.disconnecting = True
+            self.available = False
+            self.update_connection_status()
+            self.buttons()
+            self.worker.close()
+        else:
+            self.connect()
+
+    def connect(self):
+        if self.worker is not None or self.busy or self.disconnecting or self.closing or self.destroyed:
+            return
+        try:
+            self.config.validate()
+            if not self.config.credential_ref:
+                raise ValueError("请先配置并保存账号信息")
+        except ValueError as error:
+            self.log_runtime_error(str(error))
+            return
         self.available = False
         self.busy = False
         self.stop_requested = False
-        self.status_var.set("正在连接测试柜台…")
+        self.last_status = {"connection": "CONNECTING"}
+        self.footer_var.set("")
         self.history.clear()
         self.run_cache.clear()
         self.event_cache.clear()
         self.runtime_events.clear()
-        self.selected = None
+        self.viewing_run = None
         self.active_run = None
         self.running_case = None
+        if self.selected is not None:
+            self.set_result("")
+        self.replace_text("")
         for case in CASES:
-            self.tree.set(str(case.id), "state", "未执行")
+            self.tree.set(str(case.id), "state", "")
             self.tree.item(str(case.id), tags=())
-        self.progress_var.set(f"{len(CASES)} 个测试点 · 已通过 0 项")
+        self.tree.configure(displaycolumns=())
         self.buttons()
-        if self.worker and self.worker.is_alive():
-            self.pending_reconnect = True
-            self.worker.close()
-        else:
-            self.start_worker()
+        self.start_worker()
 
     def start_worker(self):
-        self.pending_reconnect = False
-        self.worker = self.worker_factory(self.config, self.output)
+        self.active_config = replace(self.config)
+        self.config_pending = False
+        self.worker = self.worker_factory(self.active_config, self.output, session_id=self.session_id)
         self.worker.start()
+        self.update_connection_status()
+        self.buttons()
 
     def view_selection(self, _event=None):
         selected = self.tree.selection()
@@ -322,6 +426,7 @@ class Application:
 
     def select(self, case_id):
         self.selected = case_id
+        self.result_frame.grid()
         case = BY_ID[case_id]
         self.title_var.set(f"{case.title}：{case.purpose}")
         runs = [r for r in self.history if r["case_id"] == case_id]
@@ -335,13 +440,13 @@ class Application:
         elif runs:
             self.show_run(runs[0])
         else:
-            self.set_result("待执行")
+            self.set_result("")
             self.viewing_run = None
             self.replace_text("")
         self.buttons()
 
     def start_case(self, case_id):
-        if self.busy or not self.available:
+        if self.busy or not self.ready_for_tests():
             return
         self.busy = True
         self.running_case = case_id
@@ -369,7 +474,7 @@ class Application:
             self.buttons()
 
     def resume_trading(self):
-        if self.worker and self.available and not self.busy:
+        if self.ready_for_tests() and not self.busy:
             self.worker.commands.put(("resume", None))
             self.footer_var.set("已请求恢复交易入口；不会重发旧请求。")
 
@@ -377,11 +482,14 @@ class Application:
         selected_running = self.busy and self.running_case is not None and self.selected == self.running_case
         self.action_button.configure(text="停止" if selected_running else "开始",
             state="normal" if (selected_running and not self.stop_requested) or (
-                not self.busy and self.available and self.selected is not None) else "disabled")
-        self.settings_button.configure(state="disabled" if self.busy or self.pending_reconnect else "normal")
-        self.resume_button.configure(state="normal" if self.available and not self.busy else "disabled")
+                not self.busy and self.ready_for_tests() and self.selected is not None) else "disabled")
+        self.settings_button.configure(state="disabled" if self.busy or self.disconnecting else "normal")
+        self.connect_button.configure(text="断开" if self.worker is not None else "连接",
+            state="disabled" if self.busy or self.disconnecting or self.closing else "normal")
+        self.resume_button.configure(state="normal" if self.ready_for_tests() and not self.busy else "disabled")
 
     def show_run(self, run):
+        self.result_frame.grid()
         self.viewing_run = run["id"]
         self.set_result(run["status"])
         case = BY_ID[run["case_id"]]
@@ -392,6 +500,12 @@ class Application:
             self.worker.commands.put(("view", run["id"]))
 
     def replace_text(self, value):
+        if self.selected is not None or value:
+            self.empty_label.grid_remove()
+            self.records_frame.grid()
+        else:
+            self.records_frame.grid_remove()
+            self.empty_label.grid()
         self.text.configure(state="normal")
         self.text.delete("1.0", "end")
         self.text.insert("end", value)
@@ -448,6 +562,7 @@ class Application:
         self.destroyed = True
         self.cancel_callback("drain_after")
         self.cancel_callback("setup_after")
+        self.cancel_callback("loading_after")
         if self.worker and self.worker.is_alive():
             self.worker.close()
 
@@ -457,18 +572,25 @@ class Application:
         self.destroyed = True
         self.cancel_callback("drain_after")
         self.cancel_callback("setup_after")
+        self.cancel_callback("loading_after")
         self.root.destroy()
 
     def handle(self, kind, value):
         if self.destroyed:
             return
         if kind == "available":
-            self.available = not self.pending_reconnect
+            # The worker can process commands; login and synchronization may still be pending.
+            self.available = not self.disconnecting and not self.closing
+            self.update_connection_status()
         elif kind == "fault":
+            self.available = False
+            self.last_status["connection"] = "ERROR"
+            self.update_connection_status()
             self.log_runtime_error(value["message"])
         elif kind == "connection_error":
+            self.available = False
             self.last_status["connection"] = "ERROR"
-            self.status_var.set(f"环境 {self.config.environment}  |  账号 {self.config.user_id}  |  ERROR  |  交易未就绪")
+            self.update_connection_status()
             self.log_runtime_error(value["message"])
         elif kind == "status":
             self.last_status = value
@@ -476,22 +598,20 @@ class Application:
                 self.resume_button.pack(side="right", padx=6)
             else:
                 self.resume_button.pack_forget()
-            self.status_var.set(f"环境 {self.config.environment}  |  账号 {self.config.user_id}  |  "
-                f"交易日 {value['day'] or '—'}  |  {value['connection']}  |  "
-                + ("交易已暂停" if value["paused"] else "可交易" if value["connection"] == "READY" else "交易未就绪"))
+            self.update_connection_status()
             if any(value["resources"].values()):
                 self.footer_var.set("存量测试资源：" + json.dumps(value["resources"], ensure_ascii=False))
         elif kind == "history":
             self.history = value
+            self.tree.configure(displaycolumns=("state",) if value else ())
             for run in reversed(value):
                 self.run_cache[run["id"]] = run
                 self.tree.set(str(run["case_id"]), "state", run["status"])
                 self.tree.item(str(run["case_id"]), tags=(run["status"],))
-            latest = {}
-            for run in value:
-                latest.setdefault(run["case_id"], run["status"])
-            self.progress_var.set(f"{len(CASES)} 个测试点 · 已通过 {sum(s == '通过' for s in latest.values())} 项")
+            if self.selected is not None:
+                self.select(self.selected)
         elif kind == "run_started":
+            self.tree.configure(displaycolumns=("state",))
             run_id = value["run_id"]
             self.busy = True
             self.running_case = value["case_id"]
@@ -525,6 +645,8 @@ class Application:
             if getattr(self, "viewing_run", None) == value["run_id"]:
                 self.render_events(value["run_id"])
         elif kind == "closed":
+            self.worker = None
+            self.disconnecting = False
             self.available = False
             self.busy = False
             self.stop_requested = False
@@ -532,8 +654,11 @@ class Application:
             if self.closing:
                 self.destroy_window()
                 return
-            if self.pending_reconnect:
-                self.start_worker()
+            self.active_config = None
+            self.config_pending = False
+            self.last_status = {}
+            self.resume_button.pack_forget()
+            self.update_connection_status()
         self.buttons()
 
     def close(self):
@@ -548,6 +673,7 @@ class Application:
         self.closing = True
         self.available = False
         self.cancel_callback("setup_after")
+        self.cancel_callback("loading_after")
         if self.worker and self.worker.is_alive():
             self.footer_var.set("正在停止测试并释放连接，请等待…")
             self.worker.close()

@@ -7,10 +7,11 @@ from .logformat import LogFormatter
 
 
 class Store:
-    def __init__(self, directory, scope, secrets=()):
+    def __init__(self, directory, scope, secrets=(), session_id=None):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         self.scope = scope
+        self.session_id = session_id or uuid.uuid4().hex
         self.secrets = [s for s in secrets if s]
         self.log_formatter = LogFormatter()
         self.db = sqlite3.connect(self.directory / "ctptest.sqlite3")
@@ -30,11 +31,23 @@ class Store:
           PRIMARY KEY(scope,key));
         CREATE TABLE IF NOT EXISTS owned (scope TEXT, day TEXT, order_id TEXT,
           request_id TEXT, run_id TEXT, symbol TEXT, PRIMARY KEY(scope,day,order_id));
+        CREATE TABLE IF NOT EXISTS sessions (scope TEXT PRIMARY KEY, session_id TEXT);
         """)
         with self.db:
-            self.db.execute("UPDATE runs SET status='结果待核对', ended=?, summary=? "
-                            "WHERE scope=? AND status='执行中'",
-                            (now(), "上次运行中断；不自动续发，请核对存量委托", scope))
+            previous = self.db.execute("SELECT session_id FROM sessions WHERE scope=?", (scope,)).fetchone()
+            if previous is None or previous[0] != self.session_id:
+                for table in ("runs", "events", "settings", "owned"):
+                    self.db.execute(f"DELETE FROM {table} WHERE scope=?", (scope,))
+                self.db.execute("INSERT OR REPLACE INTO sessions VALUES (?,?)", (scope, self.session_id))
+            else:
+                self.db.execute("UPDATE runs SET status='结果待核对', ended=?, summary=? "
+                                "WHERE scope=? AND status='执行中'",
+                                (now(), "本次会话中的测试中断，请核对存量委托", scope))
+            # Reconnects and account changes within this app session retain the log.
+            log_session = self.db.execute("SELECT session_id FROM sessions WHERE scope='text-log'").fetchone()
+            if log_session is None or log_session[0] != self.session_id:
+                (self.directory / "ctptest.log").write_text("", encoding="utf-8")
+                self.db.execute("INSERT OR REPLACE INTO sessions VALUES ('text-log',?)", (self.session_id,))
 
     def clean(self, value):
         if isinstance(value, dict):

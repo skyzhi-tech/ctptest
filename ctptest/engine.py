@@ -181,7 +181,7 @@ class Engine:
                 raise Outcome("结果待核对", message + "：等待超时，不自动重发")
             self.tick()
             if self.state["status"] == "ERROR":
-                raise Outcome("待环境准备", "SDK 进入 ERROR，请在设置中重新连接")
+                raise Outcome("待环境准备", "SDK 进入 ERROR，请断开后重新连接")
         return True
 
     def require_ready(self):
