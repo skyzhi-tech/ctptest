@@ -22,7 +22,6 @@ class ExsdkAdapter:
         from exsdk import ExApi, CtpAccount
         self.thread = threading.get_ident()
         self.errors = []
-        self.quotes = {}
         account = CtpAccount(broker_id=config.broker_id, user_id=config.user_id,
                              password=secrets["password"], front_url=config.front_url,
                              app_id=config.app_id, auth_code=secrets["auth_code"])
@@ -58,12 +57,6 @@ class ExsdkAdapter:
     def instrument(self, symbol):
         self._check()
         return self.api.query_symbol_info(symbol)
-
-    def quote(self, symbol):
-        self._check()
-        if symbol not in self.quotes:
-            self.quotes[symbol] = self.api.watch_quote(symbol)
-        return snapshot(self.quotes[symbol].data())
 
     def insert(self, **params):
         self._check()

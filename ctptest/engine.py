@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR
+from decimal import Decimal, InvalidOperation
 import time
 import uuid
 
@@ -209,42 +209,13 @@ class Engine:
             raise Outcome("待环境准备", "合约价位或最小/最大手数规则缺失")
         return data
 
-    def quote_price(self, symbol, direction="BUY", passive=False):
-        rule = self.rule(symbol)
-        quote = {}
-        def fresh():
-            nonlocal quote
-            quote = self.adapter.quote(symbol)
-            age = time.time() - (quote.get("timestamp", 0) or 0) / 1000
-            return 0 <= age <= self.config.quote_max_age
-        try:
-            self.wait(fresh, "没有新鲜行情", timeout=min(self.config.timeout, 15))
-        except Outcome as error:
-            if error.status == "结果待核对":
-                raise Outcome("待环境准备", "缺少新鲜行情，未构造或发送委托") from error
-            raise
-        tick = decimal(rule["price_tick"])
-        low, high = decimal(quote.get("lower_limit")), decimal(quote.get("upper_limit"))
-        if low <= 0 or high < low:
-            raise Outcome("待环境准备", "行情涨跌停范围不可用")
-        book = quote.get("bids" if passive else ("asks" if direction == "BUY" else "bids")) or []
-        if not book:
-            raise Outcome("待环境准备", "缺少有效买卖盘口")
-        price = decimal(book[0][0])
-        if passive:
-            price -= tick * self.config.price_offset
-        elif direction == "BUY":
-            price += tick * self.config.price_offset
-        else:
-            price -= tick * self.config.price_offset
-        price = max(low, min(high, price))
-        price = (price / tick).to_integral_value(rounding=ROUND_FLOOR if direction == "BUY" else ROUND_CEILING) * tick
-        if not low <= price <= high:
-            raise Outcome("待环境准备", "无法构造涨跌停范围内合法价格")
-        self.record("trade", "pricing", {"symbol": symbol, "price": str(price),
-                    "quote_timestamp": quote["timestamp"], "passive": passive,
-                    "lower_limit": str(low), "upper_limit": str(high)})
-        return price
+    def order_price(self, direction="BUY"):
+        field = "buy_price" if direction == "BUY" else "sell_price"
+        label = "买入价" if direction == "BUY" else "卖出价"
+        configured = str(getattr(self.config, field)).strip()
+        if not configured:
+            raise Outcome("待环境准备", f"请先在测试场景设置{label}")
+        return decimal(configured)
 
     def validate(self, params):
         self.require_ready()
@@ -252,6 +223,9 @@ class Engine:
             raise Outcome("结果待核对", "日志不可用，禁止开平仓")
         if self.paused:
             raise LocalReject("paused", "程序化交易已暂停：委托未发送")
+
+    def validate_instruction(self, params):
+        """Static contract checks used exclusively by test cases 18-20."""
         rule = self.rule(params["symbol"])
         price, tick = decimal(params["limit_price"]), decimal(rule["price_tick"])
         if price <= 0 or price % tick:
@@ -278,13 +252,15 @@ class Engine:
             self.record("monitor", "warning", {"metric": kind, "count": count, "threshold": value,
                         "message": "达到或超过阈值"})
 
-    def submit(self, symbol, direction="BUY", offset="OPEN", volume=1, price=None):
+    def submit(self, symbol, direction="BUY", offset="OPEN", volume=1, price=None, check_instructions=False):
         params = dict(symbol=symbol, direction=direction, offset=offset, volume=volume,
                       limit_price=str(price) if price is not None else "0")
         request_id = uuid.uuid4().hex[:12]
         self.record("trade", "request_intent", params | {"request_id": request_id})
         try:
             self.validate(params)
+            if check_instructions:
+                self.validate_instruction(params)
         except LocalReject as error:
             self.record("error", "local_reject", params | {"reason": error.reason, "message": str(error),
                                                          "request_id": request_id})
@@ -408,7 +384,7 @@ class Engine:
         if self.own_long(symbol) >= 1 and available >= 1:
             self.record("trade", "fixture", {"symbol": symbol, "message": "复用本工具一手可平多仓"})
             return
-        ids = self.submit(symbol, price=self.quote_price(symbol))
+        ids = self.submit(symbol, price=self.order_price())
         self.await_orders(ids, filled=True)
         self.wait(lambda: self.own_long(symbol) >= 1 and
                   (self.state.get("positions", {}).get(symbol, {}).get("available_long") or 0) >= 1,
@@ -416,7 +392,7 @@ class Engine:
 
     def passive_order(self):
         symbol = self.config.symbol
-        ids = self.submit(symbol, price=self.quote_price(symbol, passive=True))
+        ids = self.submit(symbol, price=self.order_price())
         self.await_orders(ids, passive=True)
         return ids
 
@@ -518,11 +494,11 @@ class Engine:
         self.require_ready()
         symbol = self.config.symbol
         if case_id == 1:
-            self.await_orders(self.submit(symbol, price=self.quote_price(symbol)))
+            self.await_orders(self.submit(symbol, price=self.order_price()))
         elif case_id == 2:
             self.prepare_long(symbol)
             self.await_orders(self.submit(symbol, direction="SELL", offset="CLOSE",
-                                         price=self.quote_price(symbol, "SELL")), filled=True)
+                                         price=self.order_price("SELL")), filled=True)
         elif case_id in (3, 7, 8, 13, 15):
             if case_id == 3:
                 available = [oid for oid, o in self.state["orders"].items()
@@ -562,7 +538,7 @@ class Engine:
             else:
                 volume = int(rule["max_limit_order_volume"]) + 1
             try:
-                self.submit(bad_symbol, volume=volume, price=price)
+                self.submit(bad_symbol, volume=volume, price=price, check_instructions=True)
             except LocalReject as error:
                 if error.reason != reason:
                     raise
@@ -590,7 +566,7 @@ class Engine:
                 self.store.set("paused", False)
                 self.record("system", "resume", {"paused": False})
             # Prove the common order gate is restored with an actual test order.
-            self.await_orders(self.submit(symbol, price=self.quote_price(symbol, passive=True)), passive=True)
+            self.await_orders(self.submit(symbol, price=self.order_price()), passive=True)
         elif case_id in (21, 22, 23):
             self.counter_case(case_id)
 
@@ -614,7 +590,7 @@ class Engine:
                 raise Outcome("待环境准备", "柜台可平持仓未知")
             volume, direction, offset = available + 1, "SELL", "CLOSE"
         first = len(self.raw_errors)
-        ids = self.submit(symbol, direction, offset, volume, self.quote_price(symbol, direction))
+        ids = self.submit(symbol, direction, offset, volume, self.order_price(direction))
         def matched():
             for error in self.raw_errors[first:]:
                 code = error.get("error_code")

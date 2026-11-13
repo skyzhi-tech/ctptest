@@ -24,8 +24,6 @@ LABELS = {
     "market_error_codes": "市场状态预期码（逗号分隔）",
 }
 AUTO_PARAMETER_HELP = {
-    "price_offset": "自动委托相对盘口的价位距离。",
-    "quote_max_age": "超过此时长的行情不用于下单。",
     "timeout": "等待回报上限；超时不自动重发。",
 }
 def configure_theme(root):
@@ -65,14 +63,14 @@ class Settings(tk.Toplevel):
         self.add_fields(account, ["environment", "front_url", "broker_id", "user_id",
                                   "password", "app_id", "auth_code", "token"])
         page = pages["测试场景"]
-        self.add_fields(page, ["symbol"])
-        ttk.Label(page, text="格式：交易所.合约。普通测试每笔一手，其余参数使用默认值。",
-                  wraplength=620).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 16))
+        self.add_fields(page, ["symbol", "buy_price", "sell_price"])
+        ttk.Label(page, text="合约格式：交易所.合约。买单用买入价，卖单用卖出价；撤单测试需设置可挂单价格。",
+                  wraplength=620).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 16))
         self.advanced_button = ttk.Button(page, text="测试参数…", command=self.toggle_advanced)
-        self.advanced_button.grid(row=2, column=0, columnspan=2, sticky="w")
+        self.advanced_button.grid(row=4, column=0, columnspan=2, sticky="w")
         self.advanced = ttk.Frame(page, padding=(0, 8, 0, 0))
         self.advanced.columnconfigure(1, weight=1)
-        self.add_fields(self.advanced, ["price_offset", "quote_max_age", "timeout"])
+        self.add_fields(self.advanced, ["timeout"])
         # Error tests reuse the main symbol; specialized TOML values remain optional.
         bar = ttk.Frame(self, padding=(20, 12))
         bar.grid(row=2, column=0, sticky="ew")
@@ -80,7 +78,7 @@ class Settings(tk.Toplevel):
         ttk.Button(bar, text="保存", command=self.save).pack(side="right")
         # Reserve room for either tab, including expanded parameters, once.
         # Tab changes must not override the user's window size or position.
-        self.advanced.grid(row=3, column=0, columnspan=2, sticky="ew")
+        self.advanced.grid(row=5, column=0, columnspan=2, sticky="ew")
         self.update_idletasks()
         content_height = max(self.nametowidget(tab).winfo_reqheight() for tab in self.notebook.tabs())
         self.advanced.grid_remove()
@@ -111,7 +109,7 @@ class Settings(tk.Toplevel):
             self.advanced.grid_remove()
             self.advanced_button.configure(text="测试参数…")
         else:
-            self.advanced.grid(row=3, column=0, columnspan=2, sticky="ew")
+            self.advanced.grid(row=5, column=0, columnspan=2, sticky="ew")
             self.advanced_button.configure(text="收起测试参数")
 
     def save(self):

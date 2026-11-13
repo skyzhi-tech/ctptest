@@ -1,8 +1,10 @@
 import ctypes
 from ctypes import wintypes
 from dataclasses import asdict, dataclass, fields
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import tomllib
@@ -11,14 +13,14 @@ import uuid
 
 SECRETS = ("token", "password", "auth_code")
 TEST_FIELDS = ("symbol", "funds_symbol", "position_symbol", "market_symbol", "funds_volume",
-               "price_offset", "quote_max_age", "timeout", "funds_error_codes",
+               "buy_price", "sell_price", "timeout", "funds_error_codes",
                "position_error_codes", "market_error_codes")
 FIELD_LABELS = {
     "environment": "测试环境", "front_url": "交易前置地址", "broker_id": "BrokerID",
     "user_id": "UserID", "app_id": "AppID", "symbol": "主测试合约", "log_dir": "日志目录",
     "password": "Password", "auth_code": "AuthCode", "token": "exsdk Token",
-    "funds_volume": "资金不足委托手数", "price_offset": "价格偏移（价位数）",
-    "quote_max_age": "报价有效期（秒）", "timeout": "回报等待期限（秒）",
+    "funds_volume": "资金不足委托手数", "buy_price": "买入价", "sell_price": "卖出价",
+    "timeout": "回报等待期限（秒）",
 }
 
 
@@ -80,8 +82,8 @@ class Config:
     position_symbol: str = ""
     market_symbol: str = ""
     funds_volume: int = 1
-    price_offset: int = 5
-    quote_max_age: float = 10
+    buy_price: str = ""
+    sell_price: str = ""
     timeout: float = 60
     log_dir: str = "data"
     funds_error_codes: str = ""
@@ -112,10 +114,20 @@ class Config:
             raise ConfigValidationError("front_url", "必须以 tcp:// 开头")
         if "." not in self.symbol:
             raise ConfigValidationError("symbol", "必须使用 交易所.合约 格式")
-        for name in ("funds_volume", "price_offset"):
+        for name in ("buy_price", "sell_price"):
+            value = str(getattr(self, name)).strip()
+            if not value:
+                continue  # Login and local-validation cases do not require order prices.
+            try:
+                price = Decimal(value)
+                if not price.is_finite() or price <= 0 or not math.isfinite(float(price)):
+                    raise ValueError()
+            except (InvalidOperation, ValueError, OverflowError):
+                raise ConfigValidationError(name, "必须为大于 0 的有效价格") from None
+        for name in ("funds_volume",):
             if getattr(self, name) < 1:
                 raise ConfigValidationError(name, "必须为正整数")
-        for name, maximum in (("quote_max_age", 300), ("timeout", 600)):
+        for name, maximum in (("timeout", 600),):
             if not 1 <= getattr(self, name) <= maximum:
                 raise ConfigValidationError(name, f"须为 1～{maximum} 秒")
 
