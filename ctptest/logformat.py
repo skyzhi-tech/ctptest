@@ -1,6 +1,7 @@
 """Concise business logs. Complete source payloads remain in SQLite."""
 from .cases import BY_ID
 from .timeutil import format_shanghai_time
+from .errorcodes import error_code
 
 
 SKIP = {"test_start", "pricing", "fixture", "verified", "validation_verified",
@@ -8,6 +9,9 @@ SKIP = {"test_start", "pricing", "fixture", "verified", "validation_verified",
 METRICS = {"order": "报单", "cancel": "撤单"}
 WORDS = {"BUY": "买", "SELL": "卖", "OPEN": "开仓", "CLOSE": "平仓",
          "CLOSE_TODAY": "平今", "CLOSE_YESTERDAY": "平昨"}
+ORDER_STATES = {"PENDING": "待回报", "ALIVE": "未结束", "FILLED": "全部成交",
+                "CANCELLED": "已结束（未全成）", "REJECTED": "已拒绝"}
+CONNECTION_STATES = {"SYNCING": "登录同步中", "READY": "已登录", "DISCONNECTED": "连接断开", "ERROR": "连接异常"}
 
 
 def text(value):
@@ -17,6 +21,25 @@ def text(value):
 def fields(payload, names):
     return "  ".join(f"{label}={text(payload[key])}" for key, label in names
                      if payload.get(key) is not None and text(payload[key]))
+
+
+def instrument_fields(payload):
+    symbol = text(payload.get("symbol"))
+    exchange, separator, instrument = symbol.partition(".")
+    return f"ExchangeID={exchange}  InstrumentID={instrument}" if separator else (f"合约={symbol}" if symbol else "")
+
+
+def order_identity(order_id, brief=False):
+    parts = text(order_id).split(":")
+    if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit() and parts[2]:
+        if brief:
+            return f"OrderRef={parts[2]}"
+        return f"FrontID={parts[0]}  SessionID={parts[1]}  OrderRef={parts[2]}"
+    return f"本地委托号={text(order_id)}" if order_id else ""
+
+
+def side_text(payload):
+    return " ".join(WORDS.get(payload[key], text(payload[key])) for key in ("direction", "offset") if payload.get(key))
 
 
 class LogFormatter:
@@ -31,46 +54,67 @@ class LogFormatter:
         oid = text(p.get("order_id"))
         message = text(p.get("message"))
         if kind == "request_intent":
-            params = " ".join(filter(None, (text(p.get("symbol")), WORDS.get(p.get("direction"), text(p.get("direction"))),
-                                WORDS.get(p.get("offset"), text(p.get("offset"))))))
-            return [("报单", params + "  " + fields(p, (("volume", "手数"), ("limit_price", "价格"))))]
+            return [("报单请求", "  ".join(filter(None, (instrument_fields(p), side_text(p),
+                    fields(p, (("limit_price", "LimitPrice"), ("volume", "VolumeTotalOriginal")))))))]
         if kind == "cancel_intent":
-            return [("撤单", f"委托={oid}")]
+            return [("撤单请求", order_identity(oid))]
         if kind in ("submission_result", "sdk_reject"):
             operation = "撤单" if p.get("operation") == "cancel" else "报单"
             if p.get("status") == "REJECTED":
-                return [("SDK拒绝", f"{operation}  {message or '未提供原因'}")]
-            return [("提交", "  ".join(filter(None, (operation, f"委托={oid}" if oid else "",
-                         text(p.get("status")), message))))]
+                return [("本地拒绝", f"{operation}  {message or '未提供原因'}")]
+            status = {"SUBMITTED": "已提交，等待柜台回报", "UNKNOWN": "提交结果未知，待核对"}.get(p.get("status"), text(p.get("status")))
+            return [("提交结果", "  ".join(filter(None, (operation, order_identity(oid), status, message))))]
         if kind in ("order", "order_error", "sdk_order_error"):
             result = []
             status_msg = text(p.get("status_msg"))
-            if p.get("status") == "REJECTED":
-                result.append(("柜台拒绝", f"委托={oid}  {status_msg or '未提供原因'}"))
-            elif kind == "order":
-                result.append(("委托", fields(p, (("order_id", "委托"), ("symbol", "合约"),
-                    ("status", "状态"), ("volume_traded", "已成交"), ("volume_left", "剩余")))
-                    + (f"  {status_msg}" if status_msg else "")))
+            rejected = p.get("status") == "REJECTED"
+            if rejected or kind == "order":
+                details = [order_identity(oid, brief=True), fields(p, (("order_sys_id", "OrderSysID"),)),
+                           instrument_fields(p), side_text(p),
+                           "状态=" + ORDER_STATES.get(p.get("status"), text(p.get("status")) or "未知"),
+                           fields(p, (("volume_traded", "VolumeTraded"), ("volume_left", "VolumeTotal")))]
+                code = error_code(status_msg) if rejected else None
+                if code is not None:
+                    details.append(f"ErrorID={code}")
+                if status_msg:
+                    details.append("StatusMsg=" + status_msg)
+                result.append(("柜台拒绝" if rejected else "委托回报", "  ".join(filter(None, details))))
             if p.get("cancel_error"):
-                result.append(("撤单失败", f"委托={oid}  {text(p['cancel_error'])}"))
+                result.append(("撤单失败", order_identity(oid) + "  " + text(p['cancel_error'])))
             return result
         if kind == "trade":
-            return [("成交", fields(p, (("trade_id", "成交"), ("symbol", "合约"),
-                    ("price", "价格"), ("volume", "手数"), ("order_sys_id", "交易所委托"))))]
+            return [("成交回报", "  ".join(filter(None, (instrument_fields(p), side_text(p),
+                     fields(p, (("order_sys_id", "OrderSysID"), ("trade_id", "TradeID"),
+                                ("price", "Price"), ("volume", "Volume")))))))]
         if kind == "local_reject":
             return [("本地拒绝", message)]
         if kind == "counter_error":
-            return [("柜台错误", fields(p, (("order_id", "委托"), ("error_code", "错误码")))
-                    + "  " + text(p.get("error_message")))]
+            return [("柜台错误", "  ".join(filter(None, (order_identity(oid),
+                    fields(p, (("error_code", "ErrorID"),)), text(p.get("error_message"))))))]
         if kind == "sdk_error":
             return [("SDK错误", f"{p.get('exception') or 'Error'}: {message}")]
         if kind == "submission_uncertain":
             return [("提交异常", message)]
         if kind == "connection":
             before, status = p.get("before"), p.get("status")
-            return [("连接", f"{before} → {status}" if before else text(status))]
-        if kind in ("login_verified", "connection_verified", "disconnect_verified", "reconnected"):
-            return [("连接", text(p.get("status")))]
+            current = CONNECTION_STATES.get(status, text(status))
+            return [("交易连接", f"{CONNECTION_STATES.get(before, text(before))} → {current}" if before else current)]
+        if kind == "login_context":
+            return [("CTP账户", fields(p, (("broker_id", "BrokerID"), ("user_id", "UserID"), ("app_id", "AppID")))),
+                    ("交易前置", text(p.get("front_url")))]
+        if kind == "login_verified":
+            account = p.get("account") or {}
+            state = "登录及同步完成" if p.get("status") == "READY" else CONNECTION_STATES.get(p.get("status"), text(p.get("status")))
+            result = [("登录核对", "  ".join(filter(None, (state,
+                       fields(account, (("account_id", "AccountID"),)), fields(p, (("day", "TradingDay"),))))))]
+            funds = fields(account, (("balance", "Balance"), ("available", "Available")))
+            if funds:
+                result.append(("账户资金", funds))
+            return result
+        if kind == "connection_verified" and "position_symbols" in p:
+            return [("查询汇总", f"持仓 {p['position_symbols']} 合约  委托 {p['orders']} 笔  成交 {p['trades']} 笔")]
+        if kind in ("connection_verified", "disconnect_verified", "reconnected"):
+            return [("交易连接", CONNECTION_STATES.get(p.get("status"), text(p.get("status"))))]
         if kind in ("waiting_disconnect", "waiting_reconnect"):
             return [("等待", message)]
         if kind in ("pause", "resume", "manual_resume", "pause_verified"):
@@ -108,7 +152,7 @@ class LogFormatter:
                 summary = ""
             label = {"通过": "通过", "未通过": "未通过", "待环境准备": "未就绪", "结果待核对": "待核对",
                      "SDK 限制": "SDK错误", "已停止": "停止"}.get(status, "结果")
-            result = [] if duplicate_error else [(label, summary)]
+            result = [(label, summary)]
             resources = p.get("resources") or {}
             if resources.get("未完成委托"):
                 result.append(("未完成委托", "、".join(map(str, resources["未完成委托"]))))
@@ -133,7 +177,7 @@ class LogFormatter:
             if key in self.seen:
                 continue
             self.seen.add(key)
-            if label in {"本地拒绝", "SDK拒绝", "柜台拒绝", "柜台错误", "SDK错误", "撤单失败", "提交异常", "错误"}:
+            if label in {"本地拒绝", "柜台拒绝", "柜台错误", "SDK错误", "撤单失败", "提交异常", "错误"}:
                 self.error_messages.add((event.get("run_id"), message))
                 raw = event.get("payload") or {}
                 for name in ("message", "status_msg", "error_message"):

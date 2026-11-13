@@ -36,7 +36,7 @@ class Worker(threading.Thread):
             self.emit("history", store.history())
             try:
                 secrets = self.secrets_loader(self.config)
-                store.secrets = [value for value in [*secrets.values(), self.config.user_id] if value]
+                store.secrets = [value for value in secrets.values() if value]
                 adapter = self.adapter_factory(self.config, secrets)
                 engine = Engine(self.config, store, adapter, self.emit, self.stop_test)
             except Exception as error:

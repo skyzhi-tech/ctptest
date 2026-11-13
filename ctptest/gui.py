@@ -255,8 +255,6 @@ class Application:
         heading.grid(row=0, column=0, sticky="ew")
         self.action_button = ttk.Button(heading, text="开始", command=self.toggle_test, state="disabled")
         self.action_button.pack(side="right", padx=(8, 0))
-        self.result_label = ttk.Label(heading, text="")
-        self.result_label.pack(side="right")
         self.title_var = tk.StringVar(value="")
         title = ttk.Label(heading, textvariable=self.title_var, style="Header.TLabel")
         title.pack(side="left", fill="x", expand=True)
@@ -288,9 +286,6 @@ class Application:
         width = max(240, event.width - 32)
         for label in self.wrap_labels:
             label.configure(wraplength=width - 160 if label is self.wrap_labels[0] else width)
-
-    def set_result(self, status):
-        self.result_label.configure(text=status)
 
     def first_setup(self):
         self.setup_after = None
@@ -401,8 +396,6 @@ class Application:
         self.viewing_run = None
         self.active_run = None
         self.running_case = None
-        if self.selected is not None:
-            self.set_result("")
         self.replace_text("")
         for case in CASES:
             self.tree.set(str(case.id), "state", "")
@@ -434,13 +427,11 @@ class Application:
             if self.active_run and self.run_cache.get(self.active_run, {}).get("case_id") == case_id:
                 self.show_run(self.run_cache[self.active_run])
             else:
-                self.set_result("执行中")
                 self.viewing_run = None
                 self.replace_text("")
         elif runs:
             self.show_run(runs[0])
         else:
-            self.set_result("")
             self.viewing_run = None
             self.replace_text("")
         self.buttons()
@@ -452,7 +443,6 @@ class Application:
         self.running_case = case_id
         self.stop_requested = False
         self.worker.stop_test.clear()
-        self.set_result("执行中")
         self.viewing_run = None
         self.replace_text("")
         self.footer_var.set("")
@@ -491,7 +481,6 @@ class Application:
     def show_run(self, run):
         self.result_frame.grid()
         self.viewing_run = run["id"]
-        self.set_result(run["status"])
         case = BY_ID[run["case_id"]]
         self.title_var.set(f"{case.title}：{case.purpose}")
         self.run_cache[run["id"]] = run
@@ -599,8 +588,6 @@ class Application:
             else:
                 self.resume_button.pack_forget()
             self.update_connection_status()
-            if any(value["resources"].values()):
-                self.footer_var.set("存量测试资源：" + json.dumps(value["resources"], ensure_ascii=False))
         elif kind == "history":
             self.history = value
             self.tree.configure(displaycolumns=("state",) if value else ())

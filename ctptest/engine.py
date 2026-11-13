@@ -485,10 +485,19 @@ class Engine:
         if case_id in LOG_REQUIREMENTS:
             return self.log_case(case_id)
         if case_id in (0, 4):
-            self.wait(lambda: self.state["status"] == "READY", "等待登录同步")
+            self.record("system", "login_context", {
+                "environment": self.config.environment, "front_url": self.config.front_url,
+                "broker_id": self.config.broker_id, "user_id": self.config.user_id,
+                "app_id": self.config.app_id})
+            self.wait(lambda: self.state["status"] == "READY" and bool(self.day), "等待登录同步")
             self.record("trade", "login_verified", {"status": "READY", "day": self.day,
-                        "message": "实际交易连接已登录并同步"})
-            self.record("system", "connection_verified", {"status": "READY"})
+                        "account": dict(self.state.get("account", {})),
+                        "message": "核对当前连接：SDK 确认登录及同步完成"})
+            self.record("system", "connection_verified", {"status": "READY",
+                        "position_symbols": sum(1 for position in self.state.get("positions", {}).values()
+                                                if position.get("pos_long") or position.get("pos_short")),
+                        "orders": len(self.state.get("orders", {})),
+                        "trades": len(self.state.get("trades", {}))})
             return
         if case_id == 5:
             if not self.saw_ready:
