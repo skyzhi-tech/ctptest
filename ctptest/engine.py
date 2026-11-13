@@ -164,12 +164,15 @@ class Engine:
     def resources(self):
         owners = self.store.owners(self.day)
         active = [k for k in owners if self.state.get("orders", {}).get(k, {}).get("status") not in TERMINAL]
-        positions = {}
+        long_positions, short_positions = {}, {}
         for symbol in {o["symbol"] for o in owners.values()}:
-            net = self.own_long(symbol)
-            if net:
-                positions[symbol] = net
-        return {"未完成委托": active, "本工具多头净成交": positions}
+            long_qty, short_qty = self.own_long(symbol), self.own_short(symbol)
+            if long_qty:
+                long_positions[symbol] = long_qty
+            if short_qty:
+                short_positions[symbol] = short_qty
+        return {"未完成委托": active, "本工具多头净成交": long_positions,
+                "本工具空头净成交": short_positions}
 
     def check_stop(self):
         if self.stop.is_set():
@@ -252,11 +255,12 @@ class Engine:
             self.record("monitor", "warning", {"metric": kind, "count": count, "threshold": value,
                         "message": "达到或超过阈值"})
 
-    def submit(self, symbol, direction="BUY", offset="OPEN", volume=1, price=None, check_instructions=False):
+    def submit(self, symbol, direction="BUY", offset="OPEN", volume=1, price=None,
+               check_instructions=False, auxiliary=False):
         params = dict(symbol=symbol, direction=direction, offset=offset, volume=volume,
                       limit_price=str(price) if price is not None else "0")
         request_id = uuid.uuid4().hex[:12]
-        self.record("trade", "request_intent", params | {"request_id": request_id})
+        self.record("trade", "request_intent", params | {"request_id": request_id, "auxiliary": auxiliary})
         try:
             self.validate(params)
             if check_instructions:
@@ -271,7 +275,7 @@ class Engine:
         except Exception as error:
             self.record("error", "submission_uncertain", {"request_id": request_id, "message": str(error)})
             raise Outcome("结果待核对", "提交异常，不能证明未发送，不自动重发") from error
-        ids = self.handle_results("order", results, request_id, symbol)
+        ids = self.handle_results("order", results, request_id, symbol, auxiliary=auxiliary)
         if not results:
             raise Outcome("结果待核对", "SDK 下单返回空结果")
         if any(r["status"] == "UNKNOWN" for r in results):
@@ -279,9 +283,11 @@ class Engine:
         if any(r["status"] == "REJECTED" for r in results):
             reasons = "；".join(r.get("message") or "（message 为空）" for r in results if r["status"] == "REJECTED")
             raise Outcome("未通过", "SDK 本地拒绝（TradingResult.message）：" + reasons)
+        if any(r["status"] == "SUBMITTED" and not r.get("order_id") for r in results):
+            raise Outcome("结果待核对", "提交缺少委托ID，无法完整跟踪；不继续发送后续委托")
         return ids
 
-    def handle_results(self, kind, results, request_id, symbol=""):
+    def handle_results(self, kind, results, request_id, symbol="", auxiliary=False):
         ids = []
         for index, result in enumerate(results):
             result = result | {"error_code": error_code(result.get("message"))}
@@ -292,7 +298,8 @@ class Engine:
             order_id = result.get("order_id")
             if kind == "order" and order_id and result["status"] in {"SUBMITTED", "UNKNOWN"}:
                 self.store.own(self.day, order_id, request_id, self.run_id, symbol)
-                self.cleanup_ids.add(order_id)
+                if auxiliary:
+                    self.cleanup_ids.add(order_id)
             if result["status"] in {"SUBMITTED", "UNKNOWN"}:
                 self.record("monitor", f"{kind}_submitted", result | {"request_id": request_id},
                             dedupe=f"{self.store.scope}:{self.day}:{request_id}:{index}")
@@ -306,10 +313,12 @@ class Engine:
             raise Outcome("结果待核对", "缺少委托ID，无法核对回报")
         def received():
             orders = self.state.get("orders", {})
+            complete = True
             for order_id in ids:
                 order = orders.get(order_id)
                 if not order:
-                    return False
+                    complete = False
+                    continue
                 if order.get("status") == "REJECTED":
                     raise Outcome("未通过", "柜台拒绝委托：" + str(order.get("status_msg")))
                 if passive and (order.get("volume_traded") or 0) > 0:
@@ -318,10 +327,10 @@ class Engine:
                     raise Outcome("结果待核对", "委托已撤销，未取得本测试所需的委托或成交结果")
                 if filled:
                     if order.get("status") != "FILLED":
-                        return False
+                        complete = False
                 elif order.get("status") not in {"ALIVE", "FILLED"} or not order.get("order_sys_id"):
-                    return False
-            return True
+                    complete = False
+            return complete
         self.wait(received, "等待成交" if filled else "等待真实委托回报")
         return [self.state["orders"][k] for k in ids]
 
@@ -366,33 +375,62 @@ class Engine:
         self.cleanup_ids.discard(order_id)
         return True
 
-    def own_long(self, symbol):
+    def own_position(self, symbol, direction):
         owners = self.store.owners(self.day)
         quantity = 0
+        closing_direction = "SELL" if direction == "BUY" else "BUY"
         for oid, order in self.state.get("orders", {}).items():
             if oid not in owners or order.get("symbol") != symbol:
                 continue
             volume = order.get("volume_traded") or 0
-            if order.get("direction") == "BUY" and order.get("offset") == "OPEN":
+            if order.get("direction") == direction and order.get("offset") == "OPEN":
                 quantity += volume
-            if order.get("direction") == "SELL" and str(order.get("offset", "")).startswith("CLOSE"):
+            if order.get("direction") == closing_direction and str(order.get("offset", "")).startswith("CLOSE"):
                 quantity -= volume
         return max(0, quantity)
 
-    def prepare_long(self, symbol):
-        available = self.state.get("positions", {}).get(symbol, {}).get("available_long") or 0
-        if self.own_long(symbol) >= 1 and available >= 1:
-            self.record("trade", "fixture", {"symbol": symbol, "message": "复用本工具一手可平多仓"})
-            return
-        ids = self.submit(symbol, price=self.order_price())
-        self.await_orders(ids, filled=True)
-        self.wait(lambda: self.own_long(symbol) >= 1 and
-                  (self.state.get("positions", {}).get(symbol, {}).get("available_long") or 0) >= 1,
+    def own_long(self, symbol):
+        return self.own_position(symbol, "BUY")
+
+    def own_short(self, symbol):
+        return self.own_position(symbol, "SELL")
+
+    def own_available(self, symbol, direction):
+        field = "available_long" if direction == "BUY" else "available_short"
+        available = self.state.get("positions", {}).get(symbol, {}).get(field) or 0
+        owners = self.store.owners(self.day)
+        closing_direction = "SELL" if direction == "BUY" else "BUY"
+        reserved = 0
+        for oid, order in self.state.get("orders", {}).items():
+            if (oid in owners and order.get("symbol") == symbol and order.get("status") not in TERMINAL
+                    and order.get("direction") == closing_direction
+                    and str(order.get("offset", "")).startswith("CLOSE")):
+                remaining = order.get("volume_left")
+                if remaining is None:
+                    return 0
+                reserved += remaining
+        return max(0, min(self.own_position(symbol, direction) - reserved, available))
+
+    def prepare_positions(self, symbol, directions=("BUY", "SELL")):
+        prices = {direction: self.order_price(direction) for direction in directions}
+        ids = []
+        for direction in directions:
+            if self.own_available(symbol, direction) >= 1:
+                side = "多仓" if direction == "BUY" else "空仓"
+                self.record("trade", "fixture", {"symbol": symbol, "message": f"复用本工具一手可平{side}"})
+            else:
+                ids += self.submit(symbol, direction=direction, price=prices[direction], auxiliary=True)
+        if ids:
+            self.await_orders(ids, filled=True)
+        self.wait(lambda: all(self.own_available(symbol, direction) >= 1 for direction in directions),
                   "等待本工具测试持仓同步")
+
+    def prepare_long(self, symbol):
+        self.prepare_positions(symbol, ("BUY",))
 
     def passive_order(self):
         symbol = self.config.symbol
-        ids = self.submit(symbol, price=self.order_price())
+        ids = self.submit(symbol, price=self.order_price(), auxiliary=True)
         self.await_orders(ids, passive=True)
         return ids
 
@@ -427,7 +465,9 @@ class Engine:
             self.record("system", "test_start", {"title": case.title, "purpose": case.purpose,
                                                  "prerequisite": case.prerequisite})
             self.check_stop()
-            self.perform(case_id)
+            result = self.perform(case_id)
+            if isinstance(result, str):
+                message = result
         except Outcome as error:
             status, message = error.status, str(error)
         except Exception as error:
@@ -494,11 +534,18 @@ class Engine:
         self.require_ready()
         symbol = self.config.symbol
         if case_id == 1:
-            self.await_orders(self.submit(symbol, price=self.order_price()))
+            buy_price, sell_price = self.order_price("BUY"), self.order_price("SELL")
+            ids = self.submit(symbol, direction="BUY", price=buy_price)
+            ids += self.submit(symbol, direction="SELL", price=sell_price)
+            self.await_orders(ids, filled=True)
+            return "买开、卖开各一手均已成交"
         elif case_id == 2:
-            self.prepare_long(symbol)
-            self.await_orders(self.submit(symbol, direction="SELL", offset="CLOSE",
-                                         price=self.order_price("SELL")), filled=True)
+            buy_price, sell_price = self.order_price("BUY"), self.order_price("SELL")
+            self.prepare_positions(symbol)
+            ids = self.submit(symbol, direction="SELL", offset="CLOSE", price=sell_price)
+            ids += self.submit(symbol, direction="BUY", offset="CLOSE", price=buy_price)
+            self.await_orders(ids, filled=True)
+            return "卖平多仓、买平空仓各一手均已成交"
         elif case_id in (3, 7, 8, 13, 15):
             if case_id == 3:
                 available = [oid for oid, o in self.state["orders"].items()
@@ -566,7 +613,7 @@ class Engine:
                 self.store.set("paused", False)
                 self.record("system", "resume", {"paused": False})
             # Prove the common order gate is restored with an actual test order.
-            self.await_orders(self.submit(symbol, price=self.order_price()), passive=True)
+            self.await_orders(self.submit(symbol, price=self.order_price(), auxiliary=True), passive=True)
         elif case_id in (21, 22, 23):
             self.counter_case(case_id)
 

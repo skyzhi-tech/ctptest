@@ -156,8 +156,10 @@ class LogFormatter:
             resources = p.get("resources") or {}
             if resources.get("未完成委托"):
                 result.append(("未完成委托", "、".join(map(str, resources["未完成委托"]))))
-            if resources.get("本工具多头净成交"):
-                result.append(("测试持仓", "  ".join(f"{s}={q}" for s,q in resources["本工具多头净成交"].items())))
+            longs = resources.get("本工具多头净成交") or {}
+            shorts = resources.get("本工具空头净成交") or {}
+            for symbol in sorted(longs.keys() | shorts.keys()):
+                result.append(("测试持仓", f"{symbol}  多仓={longs.get(symbol, 0)}  空仓={shorts.get(symbol, 0)}"))
             return result
         if kind == "sdk_limitation":
             return [("SDK", text(p.get("missing")))]
