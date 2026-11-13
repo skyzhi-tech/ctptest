@@ -23,13 +23,19 @@ class ExsdkAdapter:
         self.thread = threading.get_ident()
         self.errors = []
         self.quotes = {}
-        self.raw_errors_supported = False  # exsdk 1.7 public API: no native ErrorID.
         account = CtpAccount(broker_id=config.broker_id, user_id=config.user_id,
                              password=secrets["password"], front_url=config.front_url,
                              app_id=config.app_id, auth_code=secrets["auth_code"])
         self.api = ExApi(token=secrets["token"], account=account)
-        self.watches = {"account": self.api.watch_account(), "positions": self.api.watch_position(),
-                        "orders": self.api.watch_order(), "trades": self.api.watch_trade()}
+        try:
+            self.watches = {"account": self.api.watch_account(), "positions": self.api.watch_position(),
+                            "orders": self.api.watch_order(), "trades": self.api.watch_trade()}
+        except Exception:
+            try:
+                self.api.close()
+            except Exception:
+                pass  # Keep the original initialization error.
+            raise
 
     def _check(self):
         if threading.get_ident() != self.thread:

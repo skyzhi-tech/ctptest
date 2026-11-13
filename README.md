@@ -4,11 +4,12 @@
 
 ## 启动
 
-Windows x64，Python 3.14（需包含 Tkinter）。项目使用 exsdk 1.7。
+Windows x64，Python 3.14（需包含 Tkinter）。当前验收使用用户提供的未发布 exsdk 1.7 构建，尚未改为 1.8；官网同版本包不能替代本地包。
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.lock
+.\.venv\Scripts\python.exe -m pip install --force-reinstall --no-deps "C:\Users\star_\Downloads\wheels-windows-x64\exsdk-1.7-cp314-cp314-win_amd64.whl"
 .\.venv\Scripts\python.exe -m pip install -e .
 .\.venv\Scripts\ctptest.exe
 ```
@@ -17,6 +18,8 @@ python -m venv .venv
 也可使用 `.\.venv\Scripts\python.exe -m ctptest`。默认配置位于
 `%LOCALAPPDATA%\ctptest\config.toml`；可用 `--config 路径` 指定其他配置。
 没有配置时自动打开设置窗口。无需输入交易命令。
+
+本地 SDK 包及 SHA256 见 [SDK_LIMITATIONS.md](SDK_LIMITATIONS.md)。移动项目时请相应修改 wheel 路径；在正式发布 1.8 前，不用官网包覆盖此构建。
 
 ## 首次配置及使用
 
@@ -39,7 +42,7 @@ python -m venv .venv
 列表包含原始 `1.txt` 键值编号的 24 个测试点；未实现重复报单及批量撤单选测。
 暂停测试使用统一开平仓入口的暂停/恢复开关，暂停期间仍可处理回报和撤单。
 
-**柜台原始错误信息直接使用 `Order.status_msg` 展示并记录，SDK 本地拒绝原因使用 `TradingResult.message`。** 任务 21～23 正常开放执行，不因缺少独立错误码字段预先禁用。收到目标错误信息但未取得可核对错误码时，该次结果标为“结果待核对”；不是完整验收通过。
+**柜台原始错误信息使用 `Order.status_msg`，撤单失败使用 `Order.cancel_error`，即时拒绝使用 `TradingResult.message`。** SDK 在原文中保留错误码，ctptest 读取明确标注的码值并完整保留原文。任务 21～23 收到关联委托的目标错误及非零码值后可通过；配置预期错误码时必须匹配。码值缺失或格式不能明确识别时为“结果待核对”，不将即时接口返回码当成柜台异步拒单。
 测试不会伪造成功或猜测错误码。详细核验依据、其他边界及 SDK 修改建议见 [SDK_LIMITATIONS.md](SDK_LIMITATIONS.md)。
 
 其余项目仍需真实柜台验证，自动化测试通过不等于交易验收通过。

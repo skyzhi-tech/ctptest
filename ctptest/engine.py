@@ -5,6 +5,7 @@ import uuid
 
 from .cases import BY_ID, LOG_REQUIREMENTS
 from .store import now
+from .errorcodes import error_code
 
 
 TERMINAL = {"FILLED", "CANCELLED", "REJECTED"}
@@ -62,6 +63,7 @@ class Engine:
         self.last_trades = {}
         self.raw_errors = []
         self.cleanup_ids = set()
+        self.cancel_unconfirmed = set()
         self.summary_extra = []
         self.sdk_failure = None
 
@@ -93,6 +95,7 @@ class Engine:
             self.state["status"] = "ERROR"
             self.record("error", "sdk_error", {"source": "exsdk", "exception": type(error).__name__,
                         "message": str(error), "previous_status": old_status, "status": "ERROR",
+                        "error_code": error_code(str(error)),
                         "diagnostic": "unsupported_position_class" if self.sdk_failure.unsupported_position
                                       else "sdk_update_failed"})
             self.record("system", "connection", {"before": old_status, "status": "ERROR",
@@ -127,8 +130,8 @@ class Engine:
                             "request_id": owner["request_id"],
                             "error_message": order.get("status_msg"),
                             "error_source": "Order.status_msg",
-                            "error_code": None,
-                            "error_code_note": "SDK 未提供独立错误码字段；status_msg 原文完整保留"},
+                            "error_code": error_code(order.get("status_msg")),
+                            "cancel_error_code": error_code(order.get("cancel_error"))},
                             run_id=owner["run_id"],
                             case_id=self._case_for_run(owner["run_id"]))
         self.last_orders = {k: dict(v) for k, v in new.get("orders", {}).items()}
@@ -305,12 +308,13 @@ class Engine:
     def handle_results(self, kind, results, request_id, symbol=""):
         ids = []
         for index, result in enumerate(results):
+            result = result | {"error_code": error_code(result.get("message"))}
             self.record("trade", "submission_result", result | {"request_id": request_id, "operation": kind})
             if result["status"] == "REJECTED":
                 self.record("error", "sdk_reject", result | {"request_id": request_id, "operation": kind,
                             "error_source": "TradingResult.message"})
             order_id = result.get("order_id")
-            if kind == "order" and order_id:
+            if kind == "order" and order_id and result["status"] in {"SUBMITTED", "UNKNOWN"}:
                 self.store.own(self.day, order_id, request_id, self.run_id, symbol)
                 self.cleanup_ids.add(order_id)
             if result["status"] in {"SUBMITTED", "UNKNOWN"}:
@@ -334,6 +338,8 @@ class Engine:
                     raise Outcome("未通过", "柜台拒绝委托：" + str(order.get("status_msg")))
                 if passive and (order.get("volume_traded") or 0) > 0:
                     raise Outcome("结果待核对", "辅助挂单发生意外成交，请核对测试持仓")
+                if order.get("status") == "CANCELLED":
+                    raise Outcome("结果待核对", "委托已撤销，未取得本测试所需的委托或成交结果")
                 if filled:
                     if order.get("status") != "FILLED":
                         return False
@@ -353,9 +359,17 @@ class Engine:
         order = self.state.get("orders", {}).get(order_id, {})
         if order.get("status") in TERMINAL:
             return False
+        if order_id in self.cancel_unconfirmed:
+            raise Outcome("结果待核对", "此前撤单结果未确认，不自动重复发送")
         request_id = uuid.uuid4().hex[:12]
         self.record("trade", "cancel_intent", {"order_id": order_id, "request_id": request_id})
-        results = self.adapter.cancel(order_id)
+        self.cancel_unconfirmed.add(order_id)
+        try:
+            results = self.adapter.cancel(order_id)
+        except Exception as error:
+            self.record("error", "submission_uncertain", {"request_id": request_id,
+                        "order_id": order_id, "operation": "cancel", "message": str(error)})
+            raise Outcome("结果待核对", "撤单提交异常，不能证明未发送，不自动重发") from error
         self.handle_results("cancel", results, request_id)
         if not results:
             raise Outcome("结果待核对", "SDK 撤单返回空列表，不代表撤单成功")
@@ -369,6 +383,7 @@ class Engine:
                 raise Outcome("未通过", "撤单失败：" + str(current["cancel_error"]))
             return current.get("status") in TERMINAL
         self.wait(finished, "等待撤单终态", timeout=5 if cleanup else None, respect_stop=not cleanup)
+        self.cancel_unconfirmed.discard(order_id)
         current = self.state["orders"][order_id]
         if current.get("status") != "CANCELLED" or (current.get("volume_traded") or 0) > 0:
             raise Outcome("结果待核对", "撤单前发生成交或未得到撤单成功状态")
@@ -395,8 +410,9 @@ class Engine:
             return
         ids = self.submit(symbol, price=self.quote_price(symbol))
         self.await_orders(ids, filled=True)
-        if self.own_long(symbol) < 1:
-            raise Outcome("结果待核对", "无法证明存在本工具测试持仓")
+        self.wait(lambda: self.own_long(symbol) >= 1 and
+                  (self.state.get("positions", {}).get(symbol, {}).get("available_long") or 0) >= 1,
+                  "等待本工具测试持仓同步")
 
     def passive_order(self):
         symbol = self.config.symbol
@@ -409,6 +425,9 @@ class Engine:
             order = self.state.get("orders", {}).get(oid, {})
             if order.get("status") in TERMINAL:
                 self.cleanup_ids.discard(oid)
+                continue
+            if oid in self.cancel_unconfirmed:
+                self.summary_extra.append(f"委托 {oid} 撤单结果未确认，未重复发送；请核对")
                 continue
             if not order.get("order_sys_id") or self.state["status"] != "READY":
                 self.summary_extra.append(f"委托 {oid} 未完成清理，请核对")
@@ -423,6 +442,7 @@ class Engine:
         self.case_id = case_id
         self.run_id = self.store.start(case_id, self.day)
         self.cleanup_ids = set()
+        self.cancel_unconfirmed = set()
         self.summary_extra = []
         self.emit("run_started", {"case_id": case_id, "run_id": self.run_id})
         status, message = "通过", "已取得符合本测试点判定条件的真实证据"
@@ -588,19 +608,29 @@ class Engine:
         ids = self.submit(symbol, direction, offset, volume, self.quote_price(symbol, direction))
         def matched():
             for error in self.raw_errors[first:]:
-                if (error.get("order_id") in ids and error.get("error_code") is not None
-                        and (str(error["error_code"]) in expected or target_message(error.get("error_message")))):
+                code = error.get("error_code")
+                if (error.get("order_id") in ids and code not in (None, 0, "0")
+                        and (str(code) in expected if expected else target_message(error.get("error_message")))):
                     self.record("error", "counter_error_verified", error)
                     return True
             orders = [self.state["orders"].get(oid, {}) for oid in ids]
             for order in orders:
-                if order.get("status") == "REJECTED" and target_message(order.get("status_msg")):
+                code = error_code(order.get("status_msg"))
+                target = target_message(order.get("status_msg")) or (expected and str(code) in expected)
+                if order.get("status") == "REJECTED" and target:
+                    evidence = {"order_id": order["order_id"], "status_msg": order["status_msg"],
+                                "error_source": "Order.status_msg", "error_code": code,
+                                "message_verified": True, "code_verified": code not in (None, 0)}
+                    if code is not None:
+                        if code == 0 or (expected and str(code) not in expected):
+                            self.record("error", "counter_code_mismatch", evidence)
+                            raise Outcome("未通过", f"柜台错误码 {code} 与目标场景不符：" + order["status_msg"])
+                        self.record("error", "counter_error_verified", evidence)
+                        return True
                     self.record("error", "counter_message_verified", {
-                        "order_id": order["order_id"], "status_msg": order["status_msg"],
-                        "error_source": "Order.status_msg", "error_code": None,
-                        "message_verified": True, "code_verified": False})
+                        **evidence, "code_verified": False})
                     raise Outcome("结果待核对", "已收到目标柜台错误：" + order["status_msg"]
-                                  + "；错误信息已验证，未取得可核对的独立错误码，完整验收待核对")
+                                  + "；原文未包含可明确识别的错误码，完整验收待核对")
             if orders and all(o.get("status") in TERMINAL for o in orders):
                 raise Outcome("未通过", "未触发目标柜台错误，实际委托状态和原因见回报")
             return False

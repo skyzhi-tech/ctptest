@@ -1,10 +1,35 @@
+# Python environments and caches
 .venv/
+venv/
 __pycache__/
+*.py[cod]
 *.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build output and local SDK review packages
 build/
 dist/
+*.whl
+.sdk-review/
+
+# Local configuration and runtime evidence
 config.toml
+*.local.toml
 data/
+logs/
 *.sqlite3*
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 *.log
-.pytest_cache/
+
+# Temporary and OS files
+*.tmp
+.DS_Store
+Thumbs.db
+Desktop.ini
