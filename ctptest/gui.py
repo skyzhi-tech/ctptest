@@ -25,8 +25,6 @@ AUTO_PARAMETER_HELP = {
     "quote_max_age": "超过此时长的行情不用于下单。",
     "timeout": "等待回报上限；超时不自动重发。",
 }
-COLORS = {"通过": "#08734b", "未通过": "#ba303b", "待环境准备": "#996500",
-          "结果待核对": "#996500", "SDK 限制": "#8452a0", "已停止": "#64748b", "执行中": "#1764a4"}
 KINDS = {"request_intent": "委托参数", "submission_result": "SDK即时结果", "order": "柜台委托回报",
          "trade": "真实成交回报",
          "counter_error": "柜台原始错误", "order_error": "委托错误原文（status_msg）",
@@ -39,63 +37,13 @@ KINDS = {"request_intent": "委托参数", "submission_result": "SDK即时结果
          "pricing": "委托定价依据", "log_search": "日志检索", "pause": "暂停", "resume": "恢复",
          "pause_verified": "暂停拦截证据", "validation_verified": "本地检查证据"}
 
-PAGE = "#ffffff"
-SURFACE = "#ffffff"
-INK = "#182d46"
-MUTED = "#708198"
-BLUE = "#2563eb"
-
-
 def configure_theme(root):
-    root.configure(background=PAGE)
     style = ttk.Style(root)
-    style.theme_use("clam")
-    style.configure(".", font=("Microsoft YaHei UI", 10), background=PAGE, foreground=INK)
-    style.configure("TFrame", background=PAGE)
-    style.configure("Surface.TFrame", background=SURFACE)
-    style.configure("Card.TFrame", background=SURFACE, borderwidth=0, relief="flat")
-    style.configure("TLabel", background=PAGE, foreground=INK)
-    style.configure("Surface.TLabel", background=SURFACE)
-    style.configure("Muted.TLabel", background=SURFACE, foreground=MUTED, font=("Microsoft YaHei UI", 9))
-    style.configure("Section.TLabel", background=SURFACE, foreground=INK, font=("Microsoft YaHei UI", 10, "bold"))
-    style.configure("Header.TLabel", background=SURFACE, font=("Microsoft YaHei UI", 16, "bold"))
-    style.configure("TButton", padding=(14, 8), background=SURFACE, foreground=INK,
-                    bordercolor="#d7e0ec", relief="flat", focuscolor="#9ab7f6")
-    style.map("TButton", background=[("active", "#edf3ff"), ("disabled", "#f1f4f8")],
-              foreground=[("disabled", "#9aa8b9")])
-    style.configure("Primary.TButton", background=BLUE, foreground="white", bordercolor=BLUE)
-    style.map("Primary.TButton", background=[("disabled", "#dce5f6"), ("active", "#1d4ed8")],
-              foreground=[("disabled", "#8b9db9"), ("!disabled", "white")])
-    style.configure("Danger.TButton", foreground="#ba303b")
-    style.configure("Header.TButton", background=SURFACE, foreground=INK, bordercolor="#d7e0ec")
-    style.map("Header.TButton", background=[("active", "#f3f5f8"), ("disabled", "#f8f9fb")],
-              foreground=[("disabled", "#9aa8b9"), ("!disabled", INK)])
-    style.configure("TEntry", padding=(9, 7), fieldbackground=SURFACE, bordercolor="#d7e0ec", lightcolor=SURFACE)
-    style.map("TEntry", bordercolor=[("focus", BLUE)])
-    style.configure("TCombobox", padding=(8, 6), fieldbackground=SURFACE, background=SURFACE,
-                    bordercolor="#d7e0ec", arrowsize=13)
-    style.map("TCombobox", fieldbackground=[("readonly", SURFACE)], selectbackground=[("readonly", SURFACE)],
-              selectforeground=[("readonly", INK)])
-    style.configure("TNotebook", background=PAGE, borderwidth=0, tabmargins=(0, 0, 0, 10))
-    style.configure("TNotebook.Tab", padding=(20, 10), background=PAGE, foreground=MUTED, borderwidth=0)
-    style.map("TNotebook.Tab", background=[("selected", SURFACE)], foreground=[("selected", BLUE)])
-    style.configure("Treeview", rowheight=30, background=SURFACE, fieldbackground=SURFACE,
-                    borderwidth=0, foreground=INK, indent=12)
-    style.map("Treeview", background=[("selected", "#eaf1ff")], foreground=[("selected", "#1d4ed8")])
-    style.configure("Treeview.Heading", background="#f7f9fc", foreground=MUTED,
-                    font=("Microsoft YaHei UI", 9), padding=(8, 8), relief="flat")
-    style.configure("Vertical.TScrollbar", arrowsize=10, background="#d6dfeb", troughcolor=PAGE, borderwidth=0)
-    style.configure("TPanedwindow", background=PAGE)
-
-
-def section(parent, title):
-    frame = ttk.Frame(parent, style="Surface.TFrame", padding=(8, 6))
-    if title:
-        ttk.Label(frame, text=title, style="Section.TLabel").pack(anchor="w", pady=(0, 8))
-    content = ttk.Frame(frame, style="Surface.TFrame")
-    content.columnconfigure(1, weight=1)
-    content.pack(fill="both", expand=True)
-    return frame, content
+    style.theme_use("vista" if "vista" in style.theme_names() else "default")
+    style.configure(".", font=("Microsoft YaHei UI", 9))
+    style.configure("Treeview", rowheight=24)
+    style.configure("Header.TLabel", font=("Microsoft YaHei UI", 9, "bold"))
+    style.configure("Section.TLabel", font=("Microsoft YaHei UI", 9, "bold"))
 
 
 class Settings(tk.Toplevel):
@@ -103,7 +51,6 @@ class Settings(tk.Toplevel):
         super().__init__(app.root)
         self.app = app
         self.title("首次配置 / 测试环境设置")
-        self.configure(background=PAGE)
         self.transient(app.root)
         self.grab_set()
         self.vars = {}
@@ -115,9 +62,6 @@ class Settings(tk.Toplevel):
             pass
         self.rowconfigure(1, weight=1)
         self.columnconfigure(0, weight=1)
-        header = ttk.Frame(self, style="Surface.TFrame", padding=(24, 16))
-        header.grid(row=0, column=0, sticky="ew")
-        ttk.Label(header, text="连接设置", style="Header.TLabel").pack(anchor="w")
         self.notebook = ttk.Notebook(self)
         self.notebook.grid(row=1, column=0, sticky="nsew", padx=20, pady=14)
         pages = {}
@@ -127,52 +71,31 @@ class Settings(tk.Toplevel):
             page.columnconfigure(1, weight=1)
             pages[name] = page
         account = pages["账号与连接"]
-        account.columnconfigure(0, weight=1, uniform="account")
-        account.columnconfigure(1, weight=1, uniform="account")
-        connection_card, connection = section(account, "连接")
-        connection_card.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-        self.add_fields(connection, ["environment", "front_url", "broker_id"])
-        credentials_card, credentials = section(account, "账号")
-        credentials_card.grid(row=1, column=0, sticky="nsew", padx=(0, 5), pady=(0, 10))
-        self.add_fields(credentials, ["user_id", "password"])
-        auth_card, auth = section(account, "认证")
-        auth_card.grid(row=1, column=1, sticky="nsew", padx=(5, 0), pady=(0, 10))
-        self.add_fields(auth, ["app_id", "auth_code"])
-        sdk_card, sdk = section(account, None)
-        sdk_card.grid(row=2, column=0, columnspan=2, sticky="ew")
-        self.add_fields(sdk, ["token"])
+        self.add_fields(account, ["environment", "front_url", "broker_id", "user_id",
+                                  "password", "app_id", "auth_code", "token"])
         page = pages["测试场景"]
-        contract_card, contract = section(page, None)
-        contract_card.grid(row=0, column=0, columnspan=2, sticky="ew")
-        self.add_fields(contract, ["symbol"])
+        self.add_fields(page, ["symbol"])
         ttk.Label(page, text="格式：交易所.合约。普通测试每笔一手，其余参数使用默认值。",
                   wraplength=620).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 16))
-        self.advanced_button = ttk.Button(page, text="自动测试参数（通常无需修改） ▸", command=self.toggle_advanced)
+        self.advanced_button = ttk.Button(page, text="测试参数…", command=self.toggle_advanced)
         self.advanced_button.grid(row=2, column=0, columnspan=2, sticky="w")
-        self.advanced = ttk.Frame(page, style="Card.TFrame", padding=16)
+        self.advanced = ttk.Frame(page, padding=(0, 8, 0, 0))
         self.advanced.columnconfigure(1, weight=1)
         self.add_fields(self.advanced, ["price_offset", "quote_max_age", "timeout"])
         # Error tests reuse the main symbol; specialized TOML values remain optional.
-        bar = ttk.Frame(self, style="Surface.TFrame", padding=(20, 12))
+        bar = ttk.Frame(self, padding=(20, 12))
         bar.grid(row=2, column=0, sticky="ew")
         ttk.Button(bar, text="取消", command=self.destroy).pack(side="right", padx=8)
-        ttk.Button(bar, text="保存并连接", style="Primary.TButton", command=self.save).pack(side="right")
+        ttk.Button(bar, text="保存并连接", command=self.save).pack(side="right")
+        # Reserve room for either tab, including expanded parameters, once.
+        # Tab changes must not override the user's window size or position.
+        self.advanced.grid(row=3, column=0, columnspan=2, sticky="ew")
         self.update_idletasks()
-        width = min(760, self.winfo_screenwidth() - 40)
-        self._window_width = width
-        self._header = header
-        self._bar = bar
-        self.notebook.bind("<<NotebookTabChanged>>", lambda _event: self.fit_height())
-        self.fit_height()
-
-    def fit_height(self):
-        self.update_idletasks()
-        page = self.nametowidget(self.notebook.select())
-        content_height = page.winfo_reqheight()
+        content_height = max(self.nametowidget(tab).winfo_reqheight() for tab in self.notebook.tabs())
+        self.advanced.grid_remove()
         self.notebook.configure(height=content_height)
-        height = min(max(400, content_height + self._header.winfo_reqheight()
-                         + self._bar.winfo_reqheight() + 84), self.winfo_screenheight() - 80)
-        width = self._window_width
+        width = min(640, self.winfo_screenwidth() - 40)
+        height = min(max(400, content_height + bar.winfo_reqheight() + 84), self.winfo_screenheight() - 80)
         self.geometry(f"{width}x{height}+{max(0, (self.winfo_screenwidth()-width)//2)}"
                       f"+{max(0, (self.winfo_screenheight()-height)//2-20)}")
 
@@ -182,24 +105,23 @@ class Settings(tk.Toplevel):
             value = self.secrets.get(name, "") if name in SECRETS else getattr(self.app.config, name)
             var = tk.StringVar(value=str(value))
             self.vars[name] = var
-            ttk.Label(page, text=LABELS[name], style="Surface.TLabel").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 16))
+            ttk.Label(page, text=LABELS[name], style="TLabel").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 16))
             entry = ttk.Entry(page, textvariable=var, show="●" if name in SECRETS else "")
             entry.grid(row=row, column=1, sticky="ew", pady=4)
             self.entries[name] = entry
             row += 1
             if name in AUTO_PARAMETER_HELP:
-                ttk.Label(page, text=AUTO_PARAMETER_HELP[name], wraplength=690, style="Muted.TLabel").grid(
+                ttk.Label(page, text=AUTO_PARAMETER_HELP[name], wraplength=690, style="TLabel").grid(
                     row=row, column=0, columnspan=2, sticky="w", pady=(0, 8))
                 row += 1
 
     def toggle_advanced(self):
         if self.advanced.winfo_manager():
             self.advanced.grid_remove()
-            self.advanced_button.configure(text="自动测试参数（通常无需修改） ▸")
+            self.advanced_button.configure(text="测试参数…")
         else:
             self.advanced.grid(row=3, column=0, columnspan=2, sticky="ew")
-            self.advanced_button.configure(text="自动测试参数（通常无需修改） ▾")
-        self.fit_height()
+            self.advanced_button.configure(text="收起测试参数")
 
     def save(self):
         try:
@@ -276,140 +198,141 @@ class Application:
                 root.after(150, self.first_setup)
 
     def build(self):
-        self.root.title("ctptest · CTP 测试验收")
+        self.root.title("ctptest")
         configure_theme(self.root)
-        width = min(1200, self.root.winfo_screenwidth() - 40)
-        height = min(720, self.root.winfo_screenheight() - 80)
+        width = min(1100, self.root.winfo_screenwidth() - 40)
+        height = min(680, self.root.winfo_screenheight() - 80)
         self.root.geometry(f"{width}x{height}+10+10")
-        self.root.minsize(min(1060, width), min(650, height))
+        self.root.minsize(min(900, width), min(560, height))
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(2, weight=1)
+        self.root.rowconfigure(1, weight=1)
 
-        header = tk.Frame(self.root, bg=SURFACE, padx=22, pady=10)
-        header.grid(row=0, column=0, sticky="ew")
-        brand = tk.Frame(header, bg=SURFACE)
-        brand.pack(side="left")
-        tk.Label(brand, text="ctptest", bg=SURFACE, fg=INK,
-                 font=("Segoe UI", 18, "bold")).pack(side="left")
-        self.settings_button = ttk.Button(header, text="连接设置", style="Header.TButton", command=self.settings)
-        self.settings_button.pack(side="right")
-        self.stop_button = ttk.Button(header, text="停止测试", style="Header.TButton", command=self.stop, state="disabled")
-        self.stop_button.pack(side="right", padx=10)
-        self.resume_button = ttk.Button(header, text="恢复交易", style="Header.TButton", command=self.resume_trading)
-
-        connection = ttk.Frame(self.root, style="Surface.TFrame", padding=(22, 4))
-        connection.grid(row=1, column=0, sticky="ew")
-        self.connection_dot = tk.Label(connection, text="●", bg=SURFACE, fg="#a0aec0", font=("Segoe UI", 11))
-        self.connection_dot.pack(side="left", padx=(0, 8))
-        self.status_var = tk.StringVar(value="尚未连接   ·   请在连接设置中配置测试环境")
-        ttk.Label(connection, textvariable=self.status_var, style="Surface.TLabel").pack(side="left")
+        toolbar = ttk.Frame(self.root, padding=8)
+        toolbar.grid(row=0, column=0, sticky="ew")
+        self.status_var = tk.StringVar(value="未连接")
+        ttk.Label(toolbar, textvariable=self.status_var).pack(side="left")
+        self.settings_button = ttk.Button(toolbar, text="连接设置", command=self.settings)
+        self.settings_button.pack(side="right", padx=(4, 0))
+        self.stop_button = ttk.Button(toolbar, text="停止", command=self.stop, state="disabled")
+        self.stop_button.pack(side="right", padx=4)
+        self.rerun_button = ttk.Button(toolbar, text="重新测试", command=self.rerun, state="disabled")
+        self.rerun_button.pack(side="right", padx=4)
+        self.resume_button = ttk.Button(toolbar, text="恢复交易", command=self.resume_trading)
 
         body = ttk.Panedwindow(self.root, orient="horizontal")
-        body.grid(row=2, column=0, sticky="nsew", padx=18, pady=10)
-        left = ttk.Frame(body, style="Card.TFrame", padding=(10, 14, 6, 10), width=310)
-        right = ttk.Frame(body, padding=(16, 0, 0, 0))
+        body.grid(row=1, column=0, sticky="nsew", padx=8, pady=(0, 4))
+        left = ttk.LabelFrame(body, text="测试点", padding=4, width=290)
+        right = ttk.Frame(body, padding=(8, 0, 0, 0))
         body.add(left, weight=0)
         body.add(right, weight=1)
-        body.bind("<Map>", lambda _event: body.sashpos(0, 310))
+        body.bind("<Map>", lambda _event: body.sashpos(0, 290))
         left.columnconfigure(0, weight=1)
-        left.rowconfigure(2, weight=1)
-        ttk.Label(left, text="测试目录", style="Section.TLabel").grid(row=0, column=0, sticky="w", padx=6)
-        ttk.Label(left, text="首次选择执行，已有结果只查看", style="Muted.TLabel").grid(
-            row=1, column=0, sticky="w", padx=6, pady=(5, 12))
-        navigation = ttk.Frame(left, style="Surface.TFrame")
-        navigation.grid(row=2, column=0, sticky="nsew")
-        self.tree = ttk.Treeview(navigation, columns=("state",), show="tree headings", selectmode="browse", height=16)
-        self.tree.heading("#0", text="测试点")
+        left.rowconfigure(0, weight=1)
+        navigation = ttk.Frame(left)
+        navigation.grid(row=0, column=0, sticky="nsew")
+        self.tree = ttk.Treeview(navigation, columns=("state",), show="tree headings", selectmode="browse")
+        self.tree.heading("#0", text="项目")
         self.tree.heading("state", text="结果")
-        self.tree.column("#0", width=190, minwidth=150)
+        self.tree.column("#0", width=180, minwidth=140)
         self.tree.column("state", width=90, minwidth=85, stretch=False)
-        self.tree.tag_configure("group", foreground=MUTED, font=("Microsoft YaHei UI", 9, "bold"))
-        for status, color in COLORS.items():
-            self.tree.tag_configure(status, foreground=color)
         scroll = ttk.Scrollbar(navigation, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self.tree.pack(fill="both", expand=True)
         for case in CASES:
             if not self.tree.exists(case.group):
-                self.tree.insert("", "end", iid=case.group, text=case.group.partition(" ")[2], open=True, tags=("group",))
-            self.tree.insert(case.group, "end", iid=str(case.id), text=f"{case.id:02d}  {case.title}", values=("未执行",))
+                self.tree.insert("", "end", iid=case.group, text=case.group.partition(" ")[2], open=True)
+            self.tree.insert(case.group, "end", iid=str(case.id), text=case.title, values=("未执行",))
         self.tree.bind("<ButtonRelease-1>", self.click)
         self.tree.bind("<<TreeviewSelect>>", self.view_selection)
-        self.progress_var = tk.StringVar(value=f"{len(CASES)} 个测试点 · 已通过 0 项")
-        ttk.Label(left, textvariable=self.progress_var, style="Muted.TLabel").grid(
-            row=3, column=0, sticky="w", padx=6, pady=(12, 0))
+        self.progress_var = tk.StringVar(value=f"共 {len(CASES)} 项，通过 0 项")
+        ttk.Label(left, textvariable=self.progress_var).grid(row=1, column=0, sticky="w", pady=(4, 0))
 
         right.columnconfigure(0, weight=1)
-        right.rowconfigure(3, weight=1)
-        self.wrap_labels = []
-        result = ttk.Frame(right, style="Surface.TFrame", padding=(10, 6))
-        result.grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        heading = ttk.Frame(result, style="Surface.TFrame")
-        heading.pack(fill="x")
-        self.result_label = tk.Label(heading, text="待选择", font=("Microsoft YaHei UI", 11, "bold"),
-                                    bg=SURFACE, fg=MUTED, padx=8, pady=4)
-        self.result_label.pack(side="right", padx=(10, 0))
-        self.title_var = tk.StringVar(value="选择测试点")
+        right.rowconfigure(1, weight=1)
+        result = ttk.LabelFrame(right, text="结果", padding=8)
+        result.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        result.columnconfigure(0, weight=1)
+        heading = ttk.Frame(result)
+        heading.grid(row=0, column=0, sticky="ew")
+        self.result_label = ttk.Label(heading, text="待选择")
+        self.result_label.pack(side="right")
+        self.title_var = tk.StringVar(value="请选择测试点")
         title = ttk.Label(heading, textvariable=self.title_var, style="Header.TLabel")
         title.pack(side="left", fill="x", expand=True)
-        self.meta = tk.StringVar(value="选择后自动执行，完成后截图留存。")
-        meta_label = ttk.Label(result, textvariable=self.meta, style="Muted.TLabel", justify="left", wraplength=800)
-        meta_label.pack(anchor="w", fill="x", pady=(10, 6))
+        self.purpose = tk.StringVar(value="")
+        purpose_label = ttk.Label(result, textvariable=self.purpose, justify="left", wraplength=700)
+        purpose_label.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.meta = tk.StringVar(value="")
+        meta_label = ttk.Label(result, textvariable=self.meta, justify="left", wraplength=700)
+        meta_label.grid(row=2, column=0, sticky="ew", pady=(4, 0))
         self.summary = tk.StringVar(value="")
-        summary_label = ttk.Label(result, textvariable=self.summary, style="Surface.TLabel", wraplength=800, justify="left")
-        summary_label.pack(anchor="w", fill="x", pady=(0, 12))
-        toolbar = ttk.Frame(result, style="Surface.TFrame")
-        toolbar.pack(fill="x")
-        self.rerun_button = ttk.Button(toolbar, text="重新测试", style="Primary.TButton", command=self.rerun, state="disabled")
-        self.rerun_button.pack(side="right", padx=(12, 0))
-        ttk.Label(toolbar, text="历史运行", style="Muted.TLabel").pack(side="left", padx=(0, 10))
-        self.history_combo = ttk.Combobox(toolbar, state="readonly", width=30)
+        summary_label = ttk.Label(result, textvariable=self.summary, wraplength=700, justify="left")
+        summary_label.grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        self.metrics = tk.StringVar(value="")
+        metric_label = ttk.Label(result, textvariable=self.metrics, wraplength=700)
+        metric_label.grid(row=4, column=0, sticky="ew", pady=(4, 0))
+        self.evidence_var = tk.StringVar(value="")
+        evidence_label = ttk.Label(result, textvariable=self.evidence_var, justify="left", wraplength=700)
+        evidence_label.grid(row=5, column=0, sticky="ew", pady=(4, 0))
+        self.history_bar = ttk.Frame(result)
+        history_bar = self.history_bar
+        history_bar.grid(row=6, column=0, sticky="ew", pady=(6, 0))
+        ttk.Label(history_bar, text="历史运行").pack(side="left", padx=(0, 6))
+        self.history_combo = ttk.Combobox(history_bar, state="readonly", width=35)
         self.history_combo.pack(side="left", fill="x", expand=True)
         self.history_combo.bind("<<ComboboxSelected>>", self.choose_history)
 
-        metrics_card = ttk.Frame(right, style="Surface.TFrame", padding=(10, 2))
-        metrics_card.grid(row=1, column=0, sticky="ew", pady=(0, 10))
-        self.metrics = tk.StringVar(value="当前账户统计    报单 —    撤单 —    阈值 —")
-        metric_label = ttk.Label(metrics_card, textvariable=self.metrics, style="Surface.TLabel", wraplength=800)
-        metric_label.pack(fill="x")
-        evidence_card = ttk.Frame(right, style="Surface.TFrame", padding=(10, 6))
-        evidence_card.grid(row=2, column=0, sticky="ew", pady=(0, 10))
-        ttk.Label(evidence_card, text="关键证据", style="Section.TLabel").pack(anchor="w", pady=(0, 8))
-        self.evidence_var = tk.StringVar(value="执行后展示下单参数、委托回报、错误原因及监测结果。")
-        evidence_label = ttk.Label(evidence_card, textvariable=self.evidence_var, style="Surface.TLabel",
-                                   justify="left", wraplength=800)
-        evidence_label.pack(fill="x")
-        records = ttk.Frame(right, style="Surface.TFrame", padding=(10, 6))
-        records.grid(row=3, column=0, sticky="nsew")
-        records.rowconfigure(1, weight=1)
-        records.columnconfigure(0, weight=1)
-        record_heading = ttk.Frame(records, style="Surface.TFrame")
-        record_heading.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        ttk.Label(record_heading, text="执行记录", style="Section.TLabel").pack(side="left")
-        detail = ttk.Frame(records, style="Surface.TFrame")
-        detail.grid(row=1, column=0, sticky="nsew")
-        self.text = tk.Text(detail, wrap="word", height=5, font=("Microsoft YaHei UI", 9), bg=SURFACE,
-                            fg="#475b73", relief="flat", padx=4, pady=4, borderwidth=0,
-                            selectbackground="#dce9ff", state="disabled", spacing3=3)
-        scrollbar = ttk.Scrollbar(detail, command=self.text.yview)
+        records = ttk.LabelFrame(right, text="日志", padding=4)
+        records.grid(row=1, column=0, sticky="nsew")
+        self.text = tk.Text(records, wrap="word", height=6, font=("Microsoft YaHei UI", 9),
+                            relief="sunken", borderwidth=1, padx=4, pady=4, state="disabled")
+        scrollbar = ttk.Scrollbar(records, command=self.text.yview)
         self.text.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
         self.text.pack(fill="both", expand=True)
-        self.wrap_labels = [title, meta_label, summary_label, metric_label, evidence_label]
+        self.wrap_labels = [title, purpose_label, meta_label, summary_label, metric_label, evidence_label]
+        self.optional_result_labels = [(self.purpose, purpose_label), (self.meta, meta_label), (self.summary, summary_label),
+                                       (self.metrics, metric_label), (self.evidence_var, evidence_label)]
+        for variable, _label in self.optional_result_labels:
+            variable.trace_add("write", lambda *_args: self.refresh_result_rows())
+        self.refresh_result_rows()
         right.bind("<Configure>", self.resize_content)
-        self.footer_var = tk.StringVar(value="就绪后选择测试点即可执行。已有结果只查看，不会重复发单。")
-        ttk.Label(self.root, textvariable=self.footer_var, padding=(22, 8), foreground=MUTED, wraplength=1200).grid(
-            row=3, column=0, sticky="ew")
+        self.footer_var = tk.StringVar(value="")
+        ttk.Label(self.root, textvariable=self.footer_var, padding=(8, 4), wraplength=1050).grid(
+            row=2, column=0, sticky="ew")
 
     def resize_content(self, event):
-        width = max(240, event.width - 56)
+        width = max(240, event.width - 32)
         for label in self.wrap_labels:
-            label.configure(wraplength=width - 110 if label is self.wrap_labels[0] else width)
+            label.configure(wraplength=width - 90 if label is self.wrap_labels[0] else width)
 
     def set_result(self, status):
-        color = COLORS.get(status, MUTED)
-        self.result_label.configure(text=status, fg=color, bg=SURFACE)
+        self.result_label.configure(text=status)
+
+    def refresh_result_rows(self):
+        for variable, label in self.optional_result_labels:
+            visible = bool(variable.get().strip())
+            if variable is self.metrics:
+                visible = visible and self.selected in (7, 8, 12, 13, 14, 15, 31)
+            if visible:
+                label.grid()
+            else:
+                label.grid_remove()
+        if len(self.history_combo["values"]) > 1:
+            self.history_bar.grid()
+        else:
+            self.history_bar.grid_remove()
+
+    def refresh_history_choices(self):
+        runs = [r for r in self.history if r["case_id"] == self.selected]
+        self.history_combo["values"] = [f"{r['started']}  {r['status']}  {r['id']}" for r in runs]
+        if runs:
+            index = next((i for i, r in enumerate(runs) if r["id"] == getattr(self, "viewing_run", None)), 0)
+            self.history_combo.current(index)
+        else:
+            self.history_combo.set("")
+        self.refresh_result_rows()
 
     def first_setup(self):
         if self.config_error:
@@ -425,7 +348,6 @@ class Application:
         self.available = False
         self.busy = False
         self.status_var.set("正在连接测试柜台…")
-        self.connection_dot.configure(fg="#d69a24")
         self.history.clear()
         self.run_cache.clear()
         self.event_cache.clear()
@@ -461,8 +383,9 @@ class Application:
         self.selected = case_id
         case = BY_ID[case_id]
         self.title_var.set(f"{case.id:02d}  {case.title}")
+        self.purpose.set(f"目的：{case.purpose}")
         runs = [r for r in self.history if r["case_id"] == case_id]
-        self.history_combo["values"] = [f"{r['started']}  {r['status']}  {r['id']}" for r in runs]
+        self.refresh_history_choices()
         if runs:
             self.history_combo.current(0)
             self.show_run(runs[0])
@@ -470,12 +393,13 @@ class Application:
             self.show_run(self.run_cache[self.active_run])
         else:
             self.set_result("待执行")
-            self.meta.set(f"目的：{case.purpose}\n前置条件：{case.prerequisite}")
-            self.summary.set("选择后将自动执行本项测试所需的操作。")
+            self.viewing_run = None
+            self.meta.set("")
+            self.summary.set("")
             if self.busy:
-                self.summary.set("另一测试正在执行；当前只预览本项说明，不会启动新的交易。")
+                self.summary.set("其他测试执行中")
             self.replace_text("")
-            self.evidence_var.set("尚无本次测试证据")
+            self.evidence_var.set("")
             if execute and not self.busy and self.available:
                 self.start_case(case_id)
         self.buttons()
@@ -486,7 +410,9 @@ class Application:
         self.busy = True
         self.worker.stop_test.clear()
         self.set_result("执行中")
-        self.summary.set("正在检查前置条件并自动执行，请等待真实回报。")
+        self.summary.set("")
+        self.meta.set("")
+        self.evidence_var.set("")
         self.viewing_run = None
         self.replace_text("")
         self.worker.commands.put(("run", case_id))
@@ -521,10 +447,11 @@ class Application:
     def show_run(self, run):
         self.viewing_run = run["id"]
         self.set_result(run["status"])
-        case = BY_ID[run["case_id"]]
-        self.meta.set(f"运行 {run['id']}   开始 {run.get('started', '刚刚')}   交易日 {run.get('day') or '—'}\n"
-                      f"目的：{case.purpose}；条件：{case.prerequisite}")
-        self.summary.set(run.get("summary") or "正在执行，等待真实回报…")
+        self.purpose.set(f"目的：{BY_ID[run['case_id']].purpose}")
+        timestamp = str(run.get("started") or "").replace("T", " ").removesuffix("+08:00")
+        self.meta.set("  ·  ".join(part for part in (timestamp, f"交易日 {run['day']}" if run.get("day") else "", run["id"]) if part))
+        summary = run.get("summary") or ""
+        self.summary.set("" if summary == "已取得符合本测试点判定条件的真实证据" else summary)
         self.render_events(run["id"])
         if self.worker and run["id"] != self.active_run:
             self.worker.commands.put(("view", run["id"]))
@@ -571,8 +498,7 @@ class Application:
                 key_evidence["SDK限制"] = str(payload.get("missing"))
             elif kind == "connection":
                 key_evidence["连接"] = f"{payload.get('before')} → {payload.get('status')}"
-        self.evidence_var.set("\n".join(f"{key}：{value}" for key, value in key_evidence.items())
-                              or "本项证据见下方执行记录")
+        self.evidence_var.set("\n".join(f"{key}：{value}" for key, value in key_evidence.items()))
         self.replace_text("\n\n".join(lines))
         # Latest evidence remains visible during execution; stable on history revisit.
         if run_id == self.active_run:
@@ -595,8 +521,6 @@ class Application:
             self.footer_var.set(value["message"])
         elif kind == "status":
             self.last_status = value
-            self.connection_dot.configure(fg={"READY": "#12a373", "SYNCING": "#d69a24",
-                                               "DISCONNECTED": "#dc5261", "ERROR": "#dc5261"}.get(value["connection"], MUTED))
             if value["paused"]:
                 self.resume_button.pack(side="right", padx=6)
             else:
@@ -623,6 +547,7 @@ class Application:
             for run in value:
                 latest.setdefault(run["case_id"], run["status"])
             self.progress_var.set(f"{len(CASES)} 个测试点 · 已通过 {sum(s == '通过' for s in latest.values())} 项")
+            self.refresh_history_choices()
         elif kind == "run_started":
             run_id = value["run_id"]
             self.active_run = run_id
