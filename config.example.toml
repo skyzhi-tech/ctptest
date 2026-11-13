@@ -1,7 +1,7 @@
 # Copying this file is optional: first launch opens a GUI settings dialog.
 # Token/password/AuthCode are NEVER stored here. Save via the GUI to create a
 # versioned credential_ref in Windows Credential Manager.
-environment = "模拟/仿真"
+environment = "仿真期货"
 broker_id = ""
 user_id = ""
 front_url = "tcp://TEST-TRADING-FRONT:PORT"

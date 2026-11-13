@@ -67,7 +67,7 @@ class CredentialStore:
 
 @dataclass
 class Config:
-    environment: str = "模拟/仿真"
+    environment: str = "仿真期货"
     broker_id: str = ""
     user_id: str = ""
     front_url: str = ""
@@ -88,7 +88,9 @@ class Config:
 
     @property
     def scope(self):
-        raw = f"{self.environment}|{self.front_url}|{self.broker_id}|{self.user_id}"
+        # Renaming the default display label must not hide existing test records.
+        environment = "模拟/仿真" if self.environment == "仿真期货" else self.environment
+        raw = f"{environment}|{self.front_url}|{self.broker_id}|{self.user_id}"
         return hashlib.sha256(raw.encode()).hexdigest()[:24]
 
     @property
@@ -117,6 +119,8 @@ def load_config(path):
         return Config()
     with path.open("rb") as stream:
         data = tomllib.load(stream)
+    if data.get("environment") == "模拟/仿真":
+        data["environment"] = "仿真期货"
     allowed = {f.name for f in fields(Config)}
     return Config(**{k: v for k, v in data.items() if k in allowed})
 

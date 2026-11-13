@@ -26,6 +26,7 @@ AUTO_PARAMETER_HELP = {
     "timeout": "等待回报上限；超时不自动重发。",
 }
 KINDS = {"request_intent": "委托参数", "submission_result": "SDK即时结果", "order": "柜台委托回报",
+         "sdk_error": "SDK运行错误",
          "trade": "真实成交回报",
          "counter_error": "柜台原始错误", "order_error": "委托错误原文（status_msg）",
          "counter_message_verified": "柜台错误信息验证", "counter_error_verified": "柜台错误码及信息验证",
@@ -519,6 +520,10 @@ class Application:
             self.available = not self.pending_reconnect
         elif kind == "fault":
             self.footer_var.set(value["message"])
+        elif kind == "connection_error":
+            self.last_status["connection"] = "ERROR"
+            self.status_var.set(f"环境 {self.config.environment}  |  账号 {self.config.masked_user}  |  ERROR  |  交易未就绪")
+            self.footer_var.set(value["message"])
         elif kind == "status":
             self.last_status = value
             if value["paused"]:
@@ -527,7 +532,7 @@ class Application:
                 self.resume_button.pack_forget()
             self.status_var.set(f"环境 {self.config.environment}  |  账号 {self.config.masked_user}  |  "
                 f"交易日 {value['day'] or '—'}  |  {value['connection']}  |  "
-                + ("交易已暂停" if value["paused"] else "交易入口启用"))
+                + ("交易已暂停" if value["paused"] else "可交易" if value["connection"] == "READY" else "交易未就绪"))
             counts, thresholds = value["counts"], value["thresholds"]
             parts = []
             for kind, label in (("order", "报单"), ("cancel", "撤单")):

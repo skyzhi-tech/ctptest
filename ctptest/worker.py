@@ -24,6 +24,8 @@ class Worker(threading.Thread):
 
     def run(self):
         store = adapter = engine = lock = None
+        failure_status = "待环境准备"
+        failure_reason = "连接未建立，请检查设置并重新连接"
         try:
             lock = InstanceLock(self.config.log_dir, self.config.scope)
             # History is available even when credentials or the network fail.
@@ -37,7 +39,8 @@ class Worker(threading.Thread):
                 adapter = self.adapter_factory(self.config, secrets)
                 engine = Engine(self.config, store, adapter, self.emit, self.stop_test)
             except Exception as error:
-                self.emit("fault", {"message": f"连接未建立：{type(error).__name__}: {error}。请检查设置后重新连接。"})
+                failure_reason = f"连接未建立：{type(error).__name__}: {error}"
+                self.emit("connection_error", {"message": failure_reason})
             self.emit("available", {})
             while not self.shutdown.is_set():
                 try:
@@ -48,8 +51,8 @@ class Worker(threading.Thread):
                     if engine is None:
                         run_id = store.start(value, "")
                         self.emit("run_started", {"case_id": value, "run_id": run_id})
-                        status = "待环境准备"
-                        message = "连接未建立，请检查设置并重新连接"
+                        status = failure_status
+                        message = failure_reason
                         store.event("", run_id, value, "system", "test_result", {"status": status, "summary": message})
                         store.finish(run_id, status, message)
                         self.emit("run_finished", dict(case_id=value, run_id=run_id, status=status, summary=message))
@@ -75,7 +78,9 @@ class Worker(threading.Thread):
                     try:
                         engine.tick()
                     except Exception as error:
-                        self.emit("fault", {"message": f"SDK/存储异常：{error}；停止自动执行，请重新连接"})
+                        failure_status = error.status if isinstance(error, Outcome) else "结果待核对"
+                        failure_reason = str(error)
+                        self.emit("connection_error", {"message": failure_reason})
                         try:
                             if engine.run_id:
                                 store.finish(engine.run_id, "结果待核对", "后台异常中断")

@@ -22,6 +22,17 @@ class LocalReject(Outcome):
         self.reason = reason
 
 
+class SdkFailure(Outcome):
+    def __init__(self, error):
+        self.original_message = str(error)
+        self.unsupported_position = "持仓查询包含 SDK 不支持的合约类别" in self.original_message
+        if self.unsupported_position:
+            super().__init__("SDK 限制", f"持仓同步失败：{self.original_message}。"
+                             "需修复 SDK 或使用持仓类别兼容的测试账号。")
+        else:
+            super().__init__("结果待核对", f"SDK 数据更新失败：{self.original_message}")
+
+
 def decimal(value):
     try:
         result = Decimal(str(value))
@@ -52,6 +63,7 @@ class Engine:
         self.raw_errors = []
         self.cleanup_ids = set()
         self.summary_extra = []
+        self.sdk_failure = None
 
     def record(self, category, kind, payload, dedupe=None, run_id=None, case_id=None):
         if not self.storage_ok:
@@ -71,7 +83,22 @@ class Engine:
         self.emit("event", event)
 
     def tick(self):
-        new = self.adapter.poll(0.2)
+        if self.sdk_failure is not None:
+            raise self.sdk_failure
+        try:
+            new = self.adapter.poll(0.2)
+        except Exception as error:
+            self.sdk_failure = SdkFailure(error)
+            old_status = self.state["status"]
+            self.state["status"] = "ERROR"
+            self.record("error", "sdk_error", {"source": "exsdk", "exception": type(error).__name__,
+                        "message": str(error), "previous_status": old_status, "status": "ERROR",
+                        "diagnostic": "unsupported_position_class" if self.sdk_failure.unsupported_position
+                                      else "sdk_update_failed"})
+            self.record("system", "connection", {"before": old_status, "status": "ERROR",
+                        "message": str(self.sdk_failure)})
+            self.emit_status()
+            raise self.sdk_failure from error
         old_status = self.state["status"]
         old_day = self.day
         self.day = str(new.get("account", {}).get("trading_day") or self.day)
