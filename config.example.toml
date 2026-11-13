@@ -1,0 +1,21 @@
+# Copying this file is optional: first launch opens a GUI settings dialog.
+# Token/password/AuthCode are NEVER stored here. Save via the GUI to create a
+# versioned credential_ref in Windows Credential Manager.
+environment = "模拟/仿真"
+broker_id = ""
+user_id = ""
+front_url = "tcp://TEST-TRADING-FRONT:PORT"
+app_id = ""
+symbol = ""
+funds_symbol = ""
+position_symbol = ""
+market_symbol = ""
+funds_volume = 1
+price_offset = 5
+quote_max_age = 10
+timeout = 60
+log_dir = "data"
+funds_error_codes = ""
+position_error_codes = ""
+market_error_codes = ""
+credential_ref = ""
