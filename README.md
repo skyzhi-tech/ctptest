@@ -4,12 +4,11 @@
 
 ## 启动
 
-Windows x64，Python 3.14（需包含 Tkinter）。当前验收使用用户提供的未发布 exsdk 1.7 构建，尚未改为 1.8；官网同版本包不能替代本地包。
+Windows x64，Python 3.14（需包含 Tkinter）。exsdk 不限定版本，安装或更新时使用配置的包源中兼容当前 Python 的最新正式版本。
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.lock
-.\.venv\Scripts\python.exe -m pip install --force-reinstall --no-deps "C:\Users\star_\Downloads\wheels-windows-x64\exsdk-1.7-cp314-cp314-win_amd64.whl"
+.\.venv\Scripts\python.exe -m pip install --upgrade -r requirements.txt
 .\.venv\Scripts\python.exe -m pip install -e .
 .\.venv\Scripts\ctptest.exe
 ```
@@ -19,7 +18,13 @@ python -m venv .venv
 `%LOCALAPPDATA%\ctptest\config.toml`；可用 `--config 路径` 指定其他配置。
 没有配置时自动打开设置窗口。无需输入交易命令。
 
-本地 SDK 包及 SHA256 见 [SDK_LIMITATIONS.md](SDK_LIMITATIONS.md)。移动项目时请相应修改 wheel 路径；在正式发布 1.8 前，不用官网包覆盖此构建。
+更新已有环境中的 SDK：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --upgrade exsdk
+```
+
+更新后重启工具。SDK 接口核验记录及环境边界见 [SDK_LIMITATIONS.md](SDK_LIMITATIONS.md)。
 
 ## 首次配置及使用
 

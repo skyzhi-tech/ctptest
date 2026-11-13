@@ -1,0 +1,2 @@
+# Let exsdk declare its own dependencies; use --upgrade to update an existing environment.
+exsdk

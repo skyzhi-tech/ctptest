@@ -7,7 +7,7 @@ name = "ctptest"
 version = "0.1.0"
 description = "CTP 穿透式监管测试桌面工具"
 requires-python = ">=3.12"
-dependencies = ["exsdk==1.7"]
+dependencies = ["exsdk"]
 
 [project.gui-scripts]
 ctptest = "ctptest.gui:main"

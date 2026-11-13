@@ -1,6 +1,8 @@
 # exsdk 接入限制与建议修改
 
-核验对象：用户提供的**未发布 exsdk 1.7 / CPython 3.14 / Windows x64 构建**，不是官网同版本包。用户计划在测试完成后改为 1.8 并发布，ctptest 目前不提前改版本号。
+项目不限定 exsdk 版本，安装或升级时使用包源中的最新兼容正式版本。以下本地 wheel 信息是此前接入核验的历史记录，不是安装约束；更换版本后的实际柜台行为仍需验证。
+
+此前核验对象：用户提供的**未发布 exsdk 1.7 / CPython 3.14 / Windows x64 构建**。
 
 - 文件：`C:/Users/star_/Downloads/wheels-windows-x64/exsdk-1.7-cp314-cp314-win_amd64.whl`
 - SHA256：`4e641b48095effaf547d28c87b08e72104f0d0cec3b56fb3c186e844bb172ed8`
