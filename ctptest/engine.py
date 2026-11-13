@@ -20,9 +20,20 @@ class PendingFill:
 
 
 @dataclass(frozen=True)
+class PendingCounter:
+    ids: tuple[str, ...]
+    day: str
+    deadline: float
+    summary: str
+    expected: frozenset[str]
+    terms: tuple[str, ...]
+    first_error: int
+
+
+@dataclass(frozen=True)
 class TrackedRun:
     case_id: int
-    fill: PendingFill
+    pending: PendingFill | PendingCounter
 
 
 class Outcome(Exception):
@@ -359,15 +370,22 @@ class Engine:
 
     def update_pending_runs(self):
         for run_id, tracked in list(self.pending_runs.items()):
-            pending = tracked.fill
+            pending = tracked.pending
             try:
                 if self.day != pending.day:
                     raise Outcome("结果待核对", "交易日已变化，请核对原委托；不自动重发")
                 if self.state["status"] == "ERROR":
                     raise Outcome("结果待核对", "交易连接异常，请核对原委托；不自动重发")
-                if self.orders_received(pending.ids, filled=True):
+                complete = (self.counter_received(run_id, tracked) if isinstance(pending, PendingCounter)
+                            else self.orders_received(pending.ids, filled=True))
+                if complete:
                     self.finish_pending_run(run_id, "通过", pending.summary)
                 elif time.monotonic() >= pending.deadline:
+                    if isinstance(pending, PendingCounter):
+                        orders = [self.state["orders"].get(oid, {}) for oid in pending.ids]
+                        if orders and all(o.get("status") == "ALIVE" and o.get("order_sys_id") for o in orders):
+                            raise Outcome("待环境准备", "柜台已接受委托，未触发目标错误；请准备对应测试条件后再执行。挂单仍保留，可用单笔撤单处理")
+                        raise Outcome("结果待核对", "目标柜台错误回报等待超时；不自动重发，请核对已发委托")
                     self.finish_pending_run(run_id, "结果待核对", "成交回报等待超时；已发委托继续跟踪，不自动重发")
             except Outcome as error:
                 self.finish_pending_run(run_id, error.status, str(error))
@@ -381,7 +399,7 @@ class Engine:
         try:
             self.record("system", "test_result", {"status": status, "summary": message,
                         "resources": self.resources(run_id=run_id)}, run_id=run_id,
-                        case_id=tracked.case_id, day=tracked.fill.day)
+                        case_id=tracked.case_id, day=tracked.pending.day)
             self.store.finish(run_id, status, message)
         except Exception:
             status, message = "结果待核对", message + "；结果持久化失败"
@@ -455,39 +473,6 @@ class Engine:
     def own_short(self, symbol):
         return self.own_position(symbol, "SELL")
 
-    def own_available(self, symbol, direction):
-        field = "available_long" if direction == "BUY" else "available_short"
-        available = self.state.get("positions", {}).get(symbol, {}).get(field) or 0
-        owners = self.store.owners(self.day)
-        closing_direction = "SELL" if direction == "BUY" else "BUY"
-        reserved = 0
-        for oid, order in self.state.get("orders", {}).items():
-            if (oid in owners and order.get("symbol") == symbol and order.get("status") not in TERMINAL
-                    and order.get("direction") == closing_direction
-                    and str(order.get("offset", "")).startswith("CLOSE")):
-                remaining = order.get("volume_left")
-                if remaining is None:
-                    return 0
-                reserved += remaining
-        return max(0, min(self.own_position(symbol, direction) - reserved, available))
-
-    def prepare_positions(self, symbol, directions=("BUY", "SELL")):
-        prices = {direction: self.order_price(direction) for direction in directions}
-        ids = []
-        for direction in directions:
-            if self.own_available(symbol, direction) >= 1:
-                side = "多仓" if direction == "BUY" else "空仓"
-                self.record("trade", "fixture", {"symbol": symbol, "message": f"复用本工具一手可平{side}"})
-            else:
-                ids += self.submit(symbol, direction=direction, price=prices[direction], auxiliary=True)
-        if ids:
-            self.await_orders(ids, filled=True)
-        self.wait(lambda: all(self.own_available(symbol, direction) >= 1 for direction in directions),
-                  "等待本工具测试持仓同步")
-
-    def prepare_long(self, symbol):
-        self.prepare_positions(symbol, ("BUY",))
-
     def passive_order(self):
         symbol = self.config.symbol
         ids = self.submit(symbol, price=self.order_price(), auxiliary=True)
@@ -529,12 +514,13 @@ class Engine:
                                                  "prerequisite": case.prerequisite})
             self.check_stop()
             result = self.perform(case_id)
-            if isinstance(result, PendingFill):
-                self.store.set_phase(self.run_id, "等待成交")
+            if isinstance(result, (PendingFill, PendingCounter)):
+                phase = "等待回报" if isinstance(result, PendingCounter) else "等待成交"
+                self.store.set_phase(self.run_id, phase)
                 run_id, case_id = self.run_id, self.case_id
                 self.pending_runs[run_id] = TrackedRun(case_id, result)
                 self.run_id = self.case_id = None
-                self.emit("run_waiting", {"run_id": run_id, "case_id": case_id, "status": "等待成交"})
+                self.emit("run_waiting", {"run_id": run_id, "case_id": case_id, "status": phase})
                 return
             if isinstance(result, str):
                 message = result
@@ -688,58 +674,84 @@ class Engine:
             # Prove the common order gate is restored with an actual test order.
             self.await_orders(self.submit(symbol, price=self.order_price(), auxiliary=True), passive=True)
         elif case_id in (21, 22, 23):
-            self.counter_case(case_id)
+            return self.counter_case(case_id)
 
     def counter_case(self, case_id):
         prefix = {21: "funds", 22: "position", 23: "market"}[case_id]
         symbol = getattr(self.config, prefix + "_symbol") or self.config.symbol
-        expected = {s.strip() for s in getattr(self.config, prefix + "_error_codes").split(",") if s.strip()}
+        expected = frozenset(s.strip() for s in getattr(self.config, prefix + "_error_codes").split(",") if s.strip())
         terms = {
             21: ("资金不足", "insufficientfunds", "insufficientmoney"),
-            22: ("持仓不足", "可平不足", "平仓量超过", "平仓数量超过", "insufficientposition"),
-            23: ("非交易时间", "非交易时段", "市场未开", "当前状态禁止", "marketclosed", "nottrading"),
+            22: ("持仓不足", "可平不足", "可平持仓不足", "平仓量超过", "平仓数量超过", "insufficientposition"),
+            23: ("非交易时间", "非交易时段", "市场未开", "当前状态禁止", "产品不在可以交易的阶段",
+                 "交易所未开市", "当前时间禁止报单", "marketclosed", "nottrading"),
         }[case_id]
-        def target_message(message):
-            normalized = "".join(str(message or "").lower().split())
-            return any(term in normalized for term in terms)
         volume, direction, offset = self.config.funds_volume if case_id == 21 else 1, "BUY", "OPEN"
+        context = {"symbol": symbol, "expected_codes": sorted(expected)}
         if case_id == 22:
-            self.prepare_long(symbol)
-            available = self.state["positions"].get(symbol, {}).get("available_long")
+            # Deliberately exceed the account snapshot; preparing a position is unnecessary.
+            # Missing symbols represent zero positions in the completed account snapshot.
+            available = self.state["positions"].get(symbol, {"available_long": 0}).get("available_long")
             if available is None:
                 raise Outcome("待环境准备", "柜台可平持仓未知")
-            volume, direction, offset = available + 1, "SELL", "CLOSE"
+            volume, direction, offset = int(available) + 1, "SELL", "CLOSE"
+            context["available_long"] = available
+        elif case_id == 21:
+            context["available"] = self.state.get("account", {}).get("available")
+        self.record("system", "counter_context", context | {"volume": volume})
         first = len(self.raw_errors)
-        ids = self.submit(symbol, direction, offset, volume, self.order_price(direction))
-        def matched():
-            for error in self.raw_errors[first:]:
-                code = error.get("error_code")
-                if (error.get("order_id") in ids and code not in (None, 0, "0")
-                        and (str(code) in expected if expected else target_message(error.get("error_message")))):
-                    self.record("error", "counter_error_verified", error)
-                    return True
-            orders = [self.state["orders"].get(oid, {}) for oid in ids]
-            for order in orders:
-                code = error_code(order.get("status_msg"))
-                target = target_message(order.get("status_msg")) or (expected and str(code) in expected)
-                if order.get("status") == "REJECTED" and target:
-                    evidence = {"order_id": order["order_id"], "status_msg": order["status_msg"],
-                                "error_source": "Order.status_msg", "error_code": code,
-                                "message_verified": True, "code_verified": code not in (None, 0)}
-                    if code is not None:
-                        if code == 0 or (expected and str(code) not in expected):
-                            self.record("error", "counter_code_mismatch", evidence)
-                            raise Outcome("未通过", f"柜台错误码 {code} 与目标场景不符：" + order["status_msg"])
-                        self.record("error", "counter_error_verified", evidence)
-                        return True
-                    self.record("error", "counter_message_verified", {
-                        **evidence, "code_verified": False})
-                    raise Outcome("结果待核对", "已收到目标柜台错误：" + order["status_msg"]
-                                  + "；原文未包含可明确识别的错误码，完整验收待核对")
-            if orders and all(o.get("status") in TERMINAL for o in orders):
-                raise Outcome("未通过", "未触发目标柜台错误，实际委托状态和原因见回报")
-            return False
-        self.wait(matched, "等待目标原始柜台错误")
+        try:
+            ids = self.submit(symbol, direction, offset, volume, self.order_price(direction))
+        except Outcome as error:
+            if (case_id == 22 and str(error).startswith("SDK 本地拒绝（TradingResult.message）：")
+                    and self.target_message(str(error), terms)):
+                raise Outcome("SDK 限制", "超量平仓被 SDK 本地拦截，未取得柜台拒单；需 SDK 提供允许该测试请求到达柜台的接口。" + str(error)) from error
+            raise
+        self.record("system", "counter_waiting", {"message": "等待柜台错误回报，收到后自动更新"})
+        return PendingCounter(tuple(ids), self.day, time.monotonic() + self.config.timeout,
+                              BY_ID[case_id].title + "：已核对目标柜台错误及错误码", expected, terms, first)
+
+    @staticmethod
+    def target_message(message, terms):
+        normalized = "".join(str(message or "").lower().split())
+        return any(term in normalized for term in terms)
+
+    def counter_received(self, run_id, tracked):
+        pending = tracked.pending
+        evidence = []
+        complete = True
+        for oid in pending.ids:
+            raw = next((e for e in reversed(self.raw_errors[pending.first_error:])
+                        if e.get("order_id") == oid), None)
+            order = self.state["orders"].get(oid, {})
+            if raw is not None:
+                message, code = raw.get("error_message") or "", raw.get("error_code")
+                proof = raw | {"error_source": "counter_error"}
+            elif order.get("status") == "REJECTED":
+                message = order.get("status_msg") or ""
+                code = error_code(message)
+                proof = {"order_id": oid, "status_msg": message, "error_code": code,
+                         "error_source": "Order.status_msg"}
+            elif order.get("status") in {"FILLED", "CANCELLED"}:
+                raise Outcome("未通过", "委托已成交或撤销，未触发目标柜台错误；实际状态见回报")
+            else:
+                complete = False
+                continue
+            message_match = self.target_message(message, pending.terms)
+            if code in (None, "") and message_match:
+                self.record("error", "counter_message_verified", proof, run_id=run_id,
+                            case_id=tracked.case_id, day=pending.day)
+                raise Outcome("结果待核对", "已收到目标柜台错误，但原文未包含可明确识别的错误码：" + message)
+            target = str(code) in pending.expected if pending.expected else message_match
+            if code in (None, "", 0, "0") or not target:
+                raise Outcome("未通过", f"柜台错误与目标场景不符：ErrorID={code}，{message}")
+            evidence.append(proof)
+        if complete and evidence:
+            for proof in evidence:
+                self.record("error", "counter_error_verified", proof, run_id=run_id,
+                            case_id=tracked.case_id, day=pending.day)
+            return True
+        return False
 
     def log_case(self, case_id):
         category, required = LOG_REQUIREMENTS[case_id]

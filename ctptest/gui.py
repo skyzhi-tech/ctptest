@@ -63,11 +63,11 @@ class Settings(tk.Toplevel):
         self.add_fields(account, ["environment", "front_url", "broker_id", "user_id",
                                   "password", "app_id", "auth_code", "token"])
         page = pages["测试场景"]
-        self.add_fields(page, ["symbol", "buy_price", "sell_price"])
+        self.add_fields(page, ["symbol", "buy_price", "sell_price", "funds_volume"])
         ttk.Label(page, text="合约格式：交易所.合约。买单用买入价，卖单用卖出价；撤单测试需设置可挂单价格。",
-                  wraplength=620).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 16))
+                  wraplength=620).grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 16))
         self.advanced_button = ttk.Button(page, text="测试参数…", command=self.toggle_advanced)
-        self.advanced_button.grid(row=4, column=0, columnspan=2, sticky="w")
+        self.advanced_button.grid(row=5, column=0, columnspan=2, sticky="w")
         self.advanced = ttk.Frame(page, padding=(0, 8, 0, 0))
         self.advanced.columnconfigure(1, weight=1)
         self.add_fields(self.advanced, ["timeout"])
@@ -78,7 +78,7 @@ class Settings(tk.Toplevel):
         ttk.Button(bar, text="保存", command=self.save).pack(side="right")
         # Reserve room for either tab, including expanded parameters, once.
         # Tab changes must not override the user's window size or position.
-        self.advanced.grid(row=5, column=0, columnspan=2, sticky="ew")
+        self.advanced.grid(row=6, column=0, columnspan=2, sticky="ew")
         self.update_idletasks()
         content_height = max(self.nametowidget(tab).winfo_reqheight() for tab in self.notebook.tabs())
         self.advanced.grid_remove()
@@ -109,7 +109,7 @@ class Settings(tk.Toplevel):
             self.advanced.grid_remove()
             self.advanced_button.configure(text="测试参数…")
         else:
-            self.advanced.grid(row=5, column=0, columnspan=2, sticky="ew")
+            self.advanced.grid(row=6, column=0, columnspan=2, sticky="ew")
             self.advanced_button.configure(text="收起测试参数")
 
     def save(self):
@@ -541,7 +541,7 @@ class Application:
     def render_events(self, run_id):
         events = list(self.event_cache.get(run_id, []))
         run = self.run_cache.get(run_id)
-        if run and run.get("status") not in {"执行中", "等待成交"} and not any(e["kind"] == "test_result" for e in events):
+        if run and run.get("status") not in {"执行中", "等待成交", "等待回报"} and not any(e["kind"] == "test_result" for e in events):
             events.append({"at": run.get("ended") or "", "run_id": run_id,
                            "kind": "test_result", "payload": {"status": run["status"],
                                                                "summary": run.get("summary") or ""}})
@@ -654,13 +654,14 @@ class Application:
                 self.show_run(self.run_cache[run_id])
         elif kind == "run_waiting":
             run_id = value["run_id"]
-            self.run_cache[run_id].update(status="等待成交")
+            phase = value["status"]
+            self.run_cache[run_id].update(status=phase)
             if self.active_run == run_id:
                 self.busy = False
                 self.stop_requested = False
                 self.active_run = None
                 self.running_case = None
-            self.set_run_state(value["case_id"], run_id, "等待成交")
+            self.set_run_state(value["case_id"], run_id, phase)
             if getattr(self, "viewing_run", None) == run_id:
                 self.render_events(run_id)
         elif kind in ("event", "evidence"):

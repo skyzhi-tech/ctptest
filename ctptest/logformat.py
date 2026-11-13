@@ -104,6 +104,13 @@ class LogFormatter:
         if kind == "counter_error":
             return [("柜台错误", "  ".join(filter(None, (order_identity(oid),
                     fields(p, (("error_code", "ErrorID"),)), text(p.get("error_message"))))))]
+        if kind == "counter_context":
+            info = fields(p, (("available", "Available"), ("available_long", "可平多仓")))
+            if p.get("expected_codes"):
+                info = "  ".join(filter(None, (info, "预期ErrorID=" + ",".join(p["expected_codes"]))))
+            return [("测试条件", info)] if info else []
+        if kind == "counter_waiting":
+            return [("等待回报", message)]
         if kind == "sdk_error":
             return [("SDK错误", f"{p.get('exception') or 'Error'}: {message}")]
         if kind == "submission_uncertain":

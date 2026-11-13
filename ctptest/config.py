@@ -81,7 +81,7 @@ class Config:
     funds_symbol: str = ""
     position_symbol: str = ""
     market_symbol: str = ""
-    funds_volume: int = 1
+    funds_volume: int = 100
     buy_price: str = ""
     sell_price: str = ""
     timeout: float = 60

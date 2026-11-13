@@ -41,7 +41,7 @@ class Store:
                 self.db.execute("INSERT OR REPLACE INTO sessions VALUES (?,?)", (scope, self.session_id))
             else:
                 self.db.execute("UPDATE runs SET status='结果待核对', ended=?, summary=? "
-                                "WHERE scope=? AND status IN ('执行中','等待成交')",
+                                "WHERE scope=? AND status IN ('执行中','等待成交','等待回报')",
                                 (now(), "本次会话中的测试中断，请核对存量委托", scope))
             # Reconnects and account changes within this app session retain the log.
             log_session = self.db.execute("SELECT session_id FROM sessions WHERE scope='text-log'").fetchone()
