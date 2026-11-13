@@ -163,6 +163,8 @@ class Application:
         self.worker = None
         self.disconnecting = False
         self.config_pending = False
+        self.runtime_config_pending = False
+        self.config_revision = 0
         self.active_config = None
         self.closing = False
         self.destroyed = False
@@ -303,11 +305,18 @@ class Application:
     def apply_saved_config(self, config):
         self.config = config
         self.config_error = None
-        self.config_pending = self.worker is not None
-        if not self.config_pending:
+        self.config_revision += 1
+        self.runtime_config_pending = False
+        if self.worker is None:
+            self.config_pending = False
             self.available = False
             self.active_config = None
             self.last_status = {}
+        else:
+            self.config_pending = config.connection_key != self.active_config.connection_key
+            if not self.config_pending:
+                self.runtime_config_pending = True
+                self.worker.commands.put(("configure", {"config": replace(config), "revision": self.config_revision}))
         self.update_connection_status()
         self.buttons()
 
@@ -332,7 +341,9 @@ class Application:
         connection_text = hint if connecting else label
         suffix = ""
         if self.config_pending:
-            suffix = " · 配置待应用，断开后连接生效"
+            suffix = " · 连接配置待应用，断开后连接生效"
+        elif self.runtime_config_pending:
+            suffix = " · 测试参数应用中..."
         elif self.last_status.get("paused"):
             suffix = " · 交易已暂停"
         if connecting:
@@ -359,7 +370,8 @@ class Application:
 
     def ready_for_tests(self):
         return (self.worker is not None and self.available and not self.disconnecting
-                and not self.config_pending and not self.closing and not self.destroyed
+                and not self.config_pending and not self.runtime_config_pending
+                and not self.closing and not self.destroyed
                 and self.last_status.get("connection") == "READY" and bool(self.last_status.get("day")))
 
     def toggle_connection(self):
@@ -407,6 +419,7 @@ class Application:
     def start_worker(self):
         self.active_config = replace(self.config)
         self.config_pending = False
+        self.runtime_config_pending = False
         self.worker = self.worker_factory(self.active_config, self.output, session_id=self.session_id)
         self.worker.start()
         self.update_connection_status()
@@ -571,6 +584,16 @@ class Application:
             # The worker can process commands; login and synchronization may still be pending.
             self.available = not self.disconnecting and not self.closing
             self.update_connection_status()
+        elif kind in ("config_applied", "config_error"):
+            if value["revision"] != self.config_revision:
+                return
+            self.runtime_config_pending = False
+            if kind == "config_applied":
+                self.active_config = replace(self.config)
+            else:
+                self.config_pending = True
+                self.log_runtime_error("测试参数应用失败：" + value["message"])
+            self.update_connection_status()
         elif kind == "fault":
             self.available = False
             self.last_status["connection"] = "ERROR"
@@ -643,6 +666,7 @@ class Application:
                 return
             self.active_config = None
             self.config_pending = False
+            self.runtime_config_pending = False
             self.last_status = {}
             self.resume_button.pack_forget()
             self.update_connection_status()

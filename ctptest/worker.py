@@ -1,6 +1,7 @@
 import queue
 import threading
 import uuid
+from dataclasses import replace
 
 from .adapter import ExsdkAdapter
 from .config import load_secrets
@@ -75,6 +76,18 @@ class Worker(threading.Thread):
                         engine.paused = False
                         store.set("paused", False)
                         engine.record("system", "manual_resume", {"paused": False})
+                elif command == "configure":
+                    try:
+                        config = value["config"]
+                        config.validate()
+                        if config.connection_key != self.config.connection_key:
+                            raise ValueError("连接配置已改变，需断开后重新连接")
+                        self.config = replace(config)
+                        if engine:
+                            engine.config = self.config
+                        self.emit("config_applied", {"revision": value["revision"]})
+                    except Exception as error:
+                        self.emit("config_error", {"revision": value["revision"], "message": str(error)})
                 if engine:
                     try:
                         engine.tick()

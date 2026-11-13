@@ -10,6 +10,9 @@ import uuid
 
 
 SECRETS = ("token", "password", "auth_code")
+TEST_FIELDS = ("symbol", "funds_symbol", "position_symbol", "market_symbol", "funds_volume",
+               "price_offset", "quote_max_age", "timeout", "funds_error_codes",
+               "position_error_codes", "market_error_codes")
 FIELD_LABELS = {
     "environment": "测试环境", "front_url": "交易前置地址", "broker_id": "BrokerID",
     "user_id": "UserID", "app_id": "AppID", "symbol": "主测试合约", "log_dir": "日志目录",
@@ -97,6 +100,10 @@ class Config:
     def masked_user(self):
         return "***" + self.user_id[-3:]
 
+    @property
+    def connection_key(self):
+        return tuple(getattr(self, item.name) for item in fields(self) if item.name not in TEST_FIELDS)
+
     def validate(self):
         for name in ("environment", "front_url", "broker_id", "user_id", "app_id", "symbol", "log_dir"):
             if not str(getattr(self, name)).strip():
@@ -131,10 +138,17 @@ def save_config(path, config, secrets, vault=None):
         if not secrets.get(name, "").strip():
             raise ConfigValidationError(name, "不能为空")
     vault = vault or CredentialStore()
-    # New version keeps an interrupted save from overwriting existing credentials.
-    config.credential_ref = f"ctptest/{uuid.uuid4().hex}"
-    for name in SECRETS:
-        vault.write(f"{config.credential_ref}/{name}", secrets[name])
+    existing = None
+    if config.credential_ref:
+        try:
+            existing = {name: vault.read(f"{config.credential_ref}/{name}") for name in SECRETS}
+        except OSError:
+            pass
+    if existing != secrets:
+        # New credentials never overwrite the version used by an active connection.
+        config.credential_ref = f"ctptest/{uuid.uuid4().hex}"
+        for name in SECRETS:
+            vault.write(f"{config.credential_ref}/{name}", secrets[name])
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
