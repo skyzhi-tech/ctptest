@@ -11,6 +11,20 @@ from .errorcodes import error_code
 TERMINAL = {"FILLED", "CANCELLED", "REJECTED"}
 
 
+@dataclass(frozen=True)
+class PendingFill:
+    ids: tuple[str, ...]
+    day: str
+    deadline: float
+    summary: str
+
+
+@dataclass(frozen=True)
+class TrackedRun:
+    case_id: int
+    fill: PendingFill
+
+
 class Outcome(Exception):
     def __init__(self, status, message):
         super().__init__(message)
@@ -66,22 +80,25 @@ class Engine:
         self.cancel_unconfirmed = set()
         self.summary_extra = []
         self.sdk_failure = None
+        self.pending_runs = {}
+        self.last_status_payload = None
 
-    def record(self, category, kind, payload, dedupe=None, run_id=None, case_id=None):
+    def record(self, category, kind, payload, dedupe=None, run_id=None, case_id=None, day=None):
+        event_day = self.day if day is None else day
         if not self.storage_ok:
-            event = {"day": self.day, "at": now(), "run_id": run_id or self.run_id,
+            event = {"day": event_day, "at": now(), "run_id": run_id or self.run_id,
                      "case_id": case_id if case_id is not None else self.case_id,
                      "category": category, "kind": kind, "payload": self.store.clean(payload),
                      "persistence": "FAILED"}
             self.emit("event", event)
             return event
         try:
-            event = self.store.event(self.day, run_id if run_id is not None else self.run_id,
+            event = self.store.event(event_day, run_id if run_id is not None else self.run_id,
                 case_id if case_id is not None else self.case_id, category, kind, payload, dedupe)
         except Exception as error:
             self.storage_ok = False
             self.emit("fault", {"message": "日志保存失败；禁止新开平仓：" + str(error)})
-            return self.record(category, kind, payload, dedupe, run_id, case_id)
+            return self.record(category, kind, payload, dedupe, run_id, case_id, day)
         self.emit("event", event)
 
     def tick(self):
@@ -101,6 +118,7 @@ class Engine:
             self.record("system", "connection", {"before": old_status, "status": "ERROR",
                         "message": str(self.sdk_failure)})
             self.emit_status()
+            self.finish_pending_runs(self.sdk_failure.status, str(self.sdk_failure))
             raise self.sdk_failure from error
         old_status = self.state["status"]
         old_day = self.day
@@ -148,6 +166,7 @@ class Engine:
         for error in new.get("errors", []):
             self.raw_errors.append(error)
             self.record("error", "counter_error", error)
+        self.update_pending_runs()
         self.emit_status()
 
     def _case_for_run(self, run_id):
@@ -156,14 +175,18 @@ class Engine:
 
     def emit_status(self):
         counts = {name: self.store.count(self.day, name) for name in ("order", "cancel")}
-        self.emit("status", {"connection": self.state["status"], "day": self.day,
+        payload = {"connection": self.state["status"], "day": self.day,
                   "paused": self.paused, "counts": counts,
                   "thresholds": {k: self.store.get(f"threshold_{k}") for k in counts},
-                  "resources": self.resources()})
+                  "resources": self.resources()}
+        if payload != self.last_status_payload:
+            self.last_status_payload = payload
+            self.emit("status", payload)
 
-    def resources(self):
+    def resources(self, run_id=None):
         owners = self.store.owners(self.day)
-        active = [k for k in owners if self.state.get("orders", {}).get(k, {}).get("status") not in TERMINAL]
+        active = [k for k, owner in owners.items() if (run_id is None or owner["run_id"] == run_id)
+                  and self.state.get("orders", {}).get(k, {}).get("status") not in TERMINAL]
         long_positions, short_positions = {}, {}
         for symbol in {o["symbol"] for o in owners.values()}:
             long_qty, short_qty = self.own_long(symbol), self.own_short(symbol)
@@ -311,28 +334,64 @@ class Engine:
     def await_orders(self, ids, filled=False, passive=False):
         if not ids:
             raise Outcome("结果待核对", "缺少委托ID，无法核对回报")
-        def received():
-            orders = self.state.get("orders", {})
-            complete = True
-            for order_id in ids:
-                order = orders.get(order_id)
-                if not order:
-                    complete = False
-                    continue
-                if order.get("status") == "REJECTED":
-                    raise Outcome("未通过", "柜台拒绝委托：" + str(order.get("status_msg")))
-                if passive and (order.get("volume_traded") or 0) > 0:
-                    raise Outcome("结果待核对", "辅助挂单发生意外成交，请核对测试持仓")
-                if order.get("status") == "CANCELLED":
-                    raise Outcome("结果待核对", "委托已撤销，未取得本测试所需的委托或成交结果")
-                if filled:
-                    if order.get("status") != "FILLED":
-                        complete = False
-                elif order.get("status") not in {"ALIVE", "FILLED"} or not order.get("order_sys_id"):
-                    complete = False
-            return complete
-        self.wait(received, "等待成交" if filled else "等待真实委托回报")
+        self.wait(lambda: self.orders_received(ids, filled, passive), "等待成交" if filled else "等待真实委托回报")
         return [self.state["orders"][k] for k in ids]
+
+    def orders_received(self, ids, filled=False, passive=False):
+        complete = True
+        for order_id in ids:
+            order = self.state.get("orders", {}).get(order_id)
+            if not order:
+                complete = False
+                continue
+            if order.get("status") == "REJECTED":
+                raise Outcome("未通过", "柜台拒绝委托：" + str(order.get("status_msg")))
+            if passive and (order.get("volume_traded") or 0) > 0:
+                raise Outcome("结果待核对", "辅助挂单发生意外成交，请核对测试持仓")
+            if order.get("status") == "CANCELLED":
+                raise Outcome("结果待核对", "委托已撤销，未取得本测试所需的委托或成交结果")
+            if filled:
+                if order.get("status") != "FILLED":
+                    complete = False
+            elif order.get("status") not in {"ALIVE", "FILLED"} or not order.get("order_sys_id"):
+                complete = False
+        return complete
+
+    def update_pending_runs(self):
+        for run_id, tracked in list(self.pending_runs.items()):
+            pending = tracked.fill
+            try:
+                if self.day != pending.day:
+                    raise Outcome("结果待核对", "交易日已变化，请核对原委托；不自动重发")
+                if self.state["status"] == "ERROR":
+                    raise Outcome("结果待核对", "交易连接异常，请核对原委托；不自动重发")
+                if self.orders_received(pending.ids, filled=True):
+                    self.finish_pending_run(run_id, "通过", pending.summary)
+                elif time.monotonic() >= pending.deadline:
+                    self.finish_pending_run(run_id, "结果待核对", "成交回报等待超时；已发委托继续跟踪，不自动重发")
+            except Outcome as error:
+                self.finish_pending_run(run_id, error.status, str(error))
+
+    def finish_pending_run(self, run_id, status, message):
+        tracked = self.pending_runs.pop(run_id, None)
+        if tracked is None:
+            return
+        if not self.storage_ok:
+            status, message = "结果待核对", "日志写入失败；不能证明证据已保存。" + message
+        try:
+            self.record("system", "test_result", {"status": status, "summary": message,
+                        "resources": self.resources(run_id=run_id)}, run_id=run_id,
+                        case_id=tracked.case_id, day=tracked.fill.day)
+            self.store.finish(run_id, status, message)
+        except Exception:
+            status, message = "结果待核对", message + "；结果持久化失败"
+        self.emit("run_updated", {"case_id": tracked.case_id, "run_id": run_id,
+                                  "status": status, "summary": self.store.clean(message)})
+        self.emit("history", self.store.history())
+
+    def finish_pending_runs(self, status, message):
+        for run_id in list(self.pending_runs):
+            self.finish_pending_run(run_id, status, message)
 
     def cancel(self, order_id, cleanup=False):
         if not cleanup:
@@ -372,6 +431,7 @@ class Engine:
         current = self.state["orders"][order_id]
         if current.get("status") != "CANCELLED" or (current.get("volume_traded") or 0) > 0:
             raise Outcome("结果待核对", "撤单前发生成交或未得到撤单成功状态")
+        self.record("trade", "cancel_verified", current | {"order_id": order_id, "request_id": request_id})
         self.cleanup_ids.discard(order_id)
         return True
 
@@ -453,6 +513,9 @@ class Engine:
                 self.summary_extra.append(f"委托 {oid} 清理未确认：{error}")
 
     def execute(self, case_id):
+        if self.run_id is not None:
+            self.emit("request_error", {"message": "当前测试尚未结束，请先停止"})
+            return
         self.case_id = case_id
         self.run_id = self.store.start(case_id, self.day)
         self.cleanup_ids = set()
@@ -466,6 +529,13 @@ class Engine:
                                                  "prerequisite": case.prerequisite})
             self.check_stop()
             result = self.perform(case_id)
+            if isinstance(result, PendingFill):
+                self.store.set_phase(self.run_id, "等待成交")
+                run_id, case_id = self.run_id, self.case_id
+                self.pending_runs[run_id] = TrackedRun(case_id, result)
+                self.run_id = self.case_id = None
+                self.emit("run_waiting", {"run_id": run_id, "case_id": case_id, "status": "等待成交"})
+                return
             if isinstance(result, str):
                 message = result
         except Outcome as error:
@@ -473,29 +543,35 @@ class Engine:
         except Exception as error:
             status, message = "结果待核对", f"执行异常：{type(error).__name__}: {error}；不会自动重试交易"
         finally:
-            if not self.storage_ok:
-                status, message = "结果待核对", "日志写入失败；不能证明证据已保存。" + message
-            if self.storage_ok:
-                try:
-                    self.cleanup()
-                except Exception as error:
-                    self.summary_extra.append(f"清理中断：{error}")
-            if self.summary_extra:
-                message += "；" + "；".join(self.summary_extra)
-                if status == "通过":
-                    status = "结果待核对"
+            if self.run_id is not None:
+                self.finish_run(status, message)
+
+    def finish_run(self, status, message):
+        if self.run_id is None:
+            return
+        if not self.storage_ok:
+            status, message = "结果待核对", "日志写入失败；不能证明证据已保存。" + message
+        if self.storage_ok:
             try:
-                self.record("system", "test_result", {"status": status, "summary": message,
-                            "resources": self.resources()})
-                with self.store.db:
-                    self.store.db.execute("UPDATE runs SET day=? WHERE id=?", (self.day, self.run_id))
-                self.store.finish(self.run_id, status, message)
-            except Exception:
-                status, message = "结果待核对", message + "；结果持久化失败"
-            self.emit("run_finished", {"case_id": case_id, "run_id": self.run_id, "status": status,
-                                      "summary": self.store.clean(message)})
-            self.run_id = self.case_id = None
-            self.emit_status()
+                self.cleanup()
+            except Exception as error:
+                self.summary_extra.append(f"清理中断：{error}")
+        if self.summary_extra:
+            message += "；" + "；".join(self.summary_extra)
+            if status == "通过":
+                status = "结果待核对"
+        try:
+            self.record("system", "test_result", {"status": status, "summary": message,
+                        "resources": self.resources(run_id=self.run_id)})
+            with self.store.db:
+                self.store.db.execute("UPDATE runs SET day=? WHERE id=?", (self.day, self.run_id))
+            self.store.finish(self.run_id, status, message)
+        except Exception:
+            status, message = "结果待核对", message + "；结果持久化失败"
+        self.emit("run_finished", {"case_id": self.case_id, "run_id": self.run_id,
+                                  "status": status, "summary": self.store.clean(message)})
+        self.run_id = self.case_id = None
+        self.emit_status()
 
     def perform(self, case_id):
         if case_id in LOG_REQUIREMENTS:
@@ -537,15 +613,12 @@ class Engine:
             buy_price, sell_price = self.order_price("BUY"), self.order_price("SELL")
             ids = self.submit(symbol, direction="BUY", price=buy_price)
             ids += self.submit(symbol, direction="SELL", price=sell_price)
-            self.await_orders(ids, filled=True)
-            return "买开、卖开各一手均已成交"
+            return PendingFill(tuple(ids), self.day, time.monotonic() + self.config.timeout, "买开、卖开各一手均已成交")
         elif case_id == 2:
             buy_price, sell_price = self.order_price("BUY"), self.order_price("SELL")
-            self.prepare_positions(symbol)
             ids = self.submit(symbol, direction="SELL", offset="CLOSE", price=sell_price)
             ids += self.submit(symbol, direction="BUY", offset="CLOSE", price=buy_price)
-            self.await_orders(ids, filled=True)
-            return "卖平多仓、买平空仓各一手均已成交"
+            return PendingFill(tuple(ids), self.day, time.monotonic() + self.config.timeout, "卖平多仓、买平空仓各一手均已成交")
         elif case_id in (3, 7, 8, 13, 15):
             if case_id == 3:
                 available = [oid for oid, o in self.state["orders"].items()
@@ -555,7 +628,7 @@ class Engine:
                 for oid in (available[:1] or self.passive_order()):
                     if not self.cancel(oid):
                         raise Outcome("结果待核对", "未产生有效撤单")
-                return
+                return "单笔撤单已确认成功"
             metric = "cancel" if case_id in (8, 15) else "order"
             baseline = self.store.count(self.day, metric)[0]
             target = self.threshold(metric) if case_id in (13, 15) else None

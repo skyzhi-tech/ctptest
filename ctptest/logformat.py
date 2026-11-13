@@ -46,6 +46,7 @@ class LogFormatter:
     def __init__(self):
         self.seen = set()
         self.error_messages = set()
+        self.cancel_reports = set()
 
     def entries(self, event):
         kind, p = event.get("kind"), event.get("payload") or {}
@@ -53,11 +54,21 @@ class LogFormatter:
             return []
         oid = text(p.get("order_id"))
         message = text(p.get("message"))
+        cancel_key = (event.get("run_id"), oid, p.get("order_sys_id"), p.get("volume_traded"), p.get("status_msg"))
         if kind == "request_intent":
             return [("报单请求", "  ".join(filter(None, (instrument_fields(p), side_text(p),
                     fields(p, (("limit_price", "LimitPrice"), ("volume", "VolumeTotalOriginal")))))))]
         if kind == "cancel_intent":
             return [("撤单请求", order_identity(oid))]
+        if kind == "cancel_verified":
+            if cancel_key in self.cancel_reports:
+                return []
+            details = [order_identity(oid, brief=True),
+                       fields(p, (("order_sys_id", "OrderSysID"), ("volume_traded", "VolumeTraded"))),
+                       "状态=已撤单"]
+            if p.get("status_msg"):
+                details.append("StatusMsg=" + text(p["status_msg"]))
+            return [("撤单回报", "  ".join(filter(None, details)))]
         if kind in ("submission_result", "sdk_reject"):
             operation = "撤单" if p.get("operation") == "cancel" else "报单"
             if p.get("status") == "REJECTED":
@@ -65,6 +76,8 @@ class LogFormatter:
             status = {"SUBMITTED": "已提交，等待柜台回报", "UNKNOWN": "提交结果未知，待核对"}.get(p.get("status"), text(p.get("status")))
             return [("提交结果", "  ".join(filter(None, (operation, order_identity(oid), status, message))))]
         if kind in ("order", "order_error", "sdk_order_error"):
+            if kind == "order" and p.get("status") == "CANCELLED":
+                self.cancel_reports.add(cancel_key)
             result = []
             status_msg = text(p.get("status_msg"))
             rejected = p.get("status") == "REJECTED"
@@ -156,10 +169,6 @@ class LogFormatter:
             resources = p.get("resources") or {}
             if resources.get("未完成委托"):
                 result.append(("未完成委托", "、".join(map(str, resources["未完成委托"]))))
-            longs = resources.get("本工具多头净成交") or {}
-            shorts = resources.get("本工具空头净成交") or {}
-            for symbol in sorted(longs.keys() | shorts.keys()):
-                result.append(("测试持仓", f"{symbol}  多仓={longs.get(symbol, 0)}  空仓={shorts.get(symbol, 0)}"))
             return result
         if kind == "sdk_limitation":
             return [("SDK", text(p.get("missing")))]

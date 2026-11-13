@@ -97,12 +97,18 @@ class Worker(threading.Thread):
                         self.emit("connection_error", {"message": failure_reason})
                         try:
                             if engine.run_id:
-                                store.finish(engine.run_id, "结果待核对", "后台异常中断")
+                                engine.finish_run(failure_status, failure_reason)
+                            engine.finish_pending_runs(failure_status, failure_reason)
                         finally:
                             engine = None
         except Exception as error:
             self.emit("fault", {"message": f"后台初始化或存储异常：{error}"})
         finally:
+            if engine and engine.pending_runs:
+                try:
+                    engine.finish_pending_runs("已停止", "连接关闭；已发委托继续保留，请核对实际状态")
+                except Exception as error:
+                    self.emit("fault", {"message": f"保存停止结果异常：{error}"})
             if adapter:
                 try:
                     adapter.close()

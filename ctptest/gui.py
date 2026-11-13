@@ -1,9 +1,9 @@
 import argparse
 from dataclasses import fields, replace
-import json
 import os
 from pathlib import Path
 import queue
+import time
 import uuid
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -179,6 +179,7 @@ class Application:
         self.active_run = None
         self.running_case = None
         self.history = []
+        self.latest_runs = {}
         self.run_cache = {}
         self.event_cache = {}
         self.last_status = {}
@@ -400,6 +401,7 @@ class Application:
         self.last_status = {"connection": "CONNECTING"}
         self.footer_var.set("")
         self.history.clear()
+        self.latest_runs.clear()
         self.run_cache.clear()
         self.event_cache.clear()
         self.runtime_events.clear()
@@ -434,14 +436,15 @@ class Application:
         case = BY_ID[case_id]
         self.title_var.set(f"{case.title}：{case.purpose}")
         runs = [r for r in self.history if r["case_id"] == case_id]
+        latest = self.run_cache.get(self.latest_runs.get(case_id))
         if self.busy and self.running_case == case_id:
             if self.active_run and self.run_cache.get(self.active_run, {}).get("case_id") == case_id:
                 self.show_run(self.run_cache[self.active_run])
             else:
                 self.viewing_run = None
                 self.replace_text("")
-        elif runs:
-            self.show_run(runs[0])
+        elif latest or runs:
+            self.show_run(latest or runs[0])
         else:
             self.viewing_run = None
             self.replace_text("")
@@ -457,8 +460,13 @@ class Application:
         self.viewing_run = None
         self.replace_text("")
         self.footer_var.set("")
-        self.worker.commands.put(("run", case_id))
+        self.tree.configure(displaycolumns=("state",))
+        self.tree.set(str(case_id), "state", "执行中")
+        self.tree.item(str(case_id), tags=("执行中",))
         self.buttons()
+        self.root.update_idletasks()
+        if not self.destroyed and not self.closing:
+            self.worker.commands.put(("run", case_id))
 
     def toggle_test(self):
         if self.busy:
@@ -499,6 +507,14 @@ class Application:
         if self.worker and run["id"] != self.active_run:
             self.worker.commands.put(("view", run["id"]))
 
+    def set_run_state(self, case_id, run_id, status):
+        if self.latest_runs.get(case_id, run_id) != run_id:
+            return
+        if self.busy and self.active_run is None and self.running_case == case_id:
+            return
+        self.tree.set(str(case_id), "state", status)
+        self.tree.item(str(case_id), tags=(status,))
+
     def replace_text(self, value):
         if self.selected is not None or value:
             self.empty_label.grid_remove()
@@ -525,7 +541,7 @@ class Application:
     def render_events(self, run_id):
         events = list(self.event_cache.get(run_id, []))
         run = self.run_cache.get(run_id)
-        if run and run.get("status") != "执行中" and not any(e["kind"] == "test_result" for e in events):
+        if run and run.get("status") not in {"执行中", "等待成交"} and not any(e["kind"] == "test_result" for e in events):
             events.append({"at": run.get("ended") or "", "run_id": run_id,
                            "kind": "test_result", "payload": {"status": run["status"],
                                                                "summary": run.get("summary") or ""}})
@@ -537,14 +553,17 @@ class Application:
         self.drain_after = None
         if self.destroyed:
             return
+        deadline = time.monotonic() + 0.012
+        processed = 0
         try:
-            while not self.destroyed:
+            while not self.destroyed and processed < 50 and time.monotonic() < deadline:
                 kind, value = self.output.get_nowait()
                 self.handle(kind, value)
+                processed += 1
         except queue.Empty:
             pass
         if not self.destroyed:
-            self.drain_after = self.root.after(80, self.drain)
+            self.drain_after = self.root.after(15 if not self.output.empty() else 80, self.drain)
 
     def cancel_callback(self, name):
         callback = getattr(self, name)
@@ -602,6 +621,8 @@ class Application:
             self.last_status["connection"] = "ERROR"
             self.update_connection_status()
             self.log_runtime_error(value["message"])
+        elif kind == "request_error":
+            self.log_runtime_error(value["message"])
         elif kind == "status":
             self.last_status = value
             if value["paused"]:
@@ -611,11 +632,11 @@ class Application:
             self.update_connection_status()
         elif kind == "history":
             self.history = value
-            self.tree.configure(displaycolumns=("state",) if value else ())
+            self.tree.configure(displaycolumns=("state",) if value or self.busy else ())
             for run in reversed(value):
                 self.run_cache[run["id"]] = run
-                self.tree.set(str(run["case_id"]), "state", run["status"])
-                self.tree.item(str(run["case_id"]), tags=(run["status"],))
+                self.latest_runs[run["case_id"]] = run["id"]
+                self.set_run_state(run["case_id"], run["id"], run["status"])
             if self.selected is not None:
                 self.select(self.selected)
         elif kind == "run_started":
@@ -624,29 +645,41 @@ class Application:
             self.busy = True
             self.running_case = value["case_id"]
             self.active_run = run_id
+            self.latest_runs[value["case_id"]] = run_id
             self.run_cache[run_id] = dict(id=run_id, case_id=value["case_id"], status="执行中", summary="")
             self.event_cache[run_id] = []
             self.tree.set(str(value["case_id"]), "state", "执行中")
             self.tree.item(str(value["case_id"]), tags=("执行中",))
             if self.selected == value["case_id"]:
                 self.show_run(self.run_cache[run_id])
+        elif kind == "run_waiting":
+            run_id = value["run_id"]
+            self.run_cache[run_id].update(status="等待成交")
+            if self.active_run == run_id:
+                self.busy = False
+                self.stop_requested = False
+                self.active_run = None
+                self.running_case = None
+            self.set_run_state(value["case_id"], run_id, "等待成交")
+            if getattr(self, "viewing_run", None) == run_id:
+                self.render_events(run_id)
         elif kind in ("event", "evidence"):
             run_id = self.active_run if kind == "evidence" else value.get("run_id")
             if run_id:
                 self.event_cache.setdefault(run_id, []).append(value)
                 if getattr(self, "viewing_run", None) == run_id:
                     self.render_events(run_id)
-        elif kind == "run_finished":
+        elif kind in ("run_finished", "run_updated"):
             run_id = value["run_id"]
             run = self.run_cache.get(run_id, {}) | value | {"id": run_id, "ended": now()}
             self.run_cache[run_id] = run
-            self.tree.set(str(value["case_id"]), "state", value["status"])
-            self.tree.item(str(value["case_id"]), tags=(value["status"],))
-            self.busy = False
-            self.stop_requested = False
-            self.active_run = None
-            self.running_case = None
-            if self.selected == value["case_id"]:
+            self.set_run_state(value["case_id"], run_id, value["status"])
+            if kind == "run_finished" and self.active_run == run_id:
+                self.busy = False
+                self.stop_requested = False
+                self.active_run = None
+                self.running_case = None
+            if getattr(self, "viewing_run", None) == run_id:
                 self.show_run(run)
         elif kind == "view":
             self.event_cache[value["run_id"]] = value["events"]
@@ -673,12 +706,6 @@ class Application:
     def close(self):
         if self.closing or self.destroyed:
             return
-        resources = self.last_status.get("resources", {})
-        if self.busy or any(resources.values()):
-            detail = json.dumps(resources, ensure_ascii=False)
-            if not messagebox.askyesno("退出前核对", "退出不会自动平仓或撤销全部委托。\n"
-                    + detail + "\n确定停止并退出？", parent=self.root):
-                return
         self.closing = True
         self.available = False
         self.cancel_callback("setup_after")
