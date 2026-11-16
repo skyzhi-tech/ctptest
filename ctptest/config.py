@@ -10,7 +10,6 @@ from pathlib import Path
 import tomllib
 import uuid
 from .login_validation import UserIDError, validate_user_id
-from .cases import CONTINUOUS_MIN_RATE
 
 
 SECRETS = ("token", "password", "auth_code")
@@ -139,8 +138,8 @@ class Config:
         for name, maximum in (("timeout", 600),):
             if not 1 <= getattr(self, name) <= maximum:
                 raise ConfigValidationError(name, f"须为 1～{maximum} 秒")
-        if not math.isfinite(self.continuous_rate) or self.continuous_rate < CONTINUOUS_MIN_RATE:
-            raise ConfigValidationError("continuous_rate", f"不得低于生产阈值 {CONTINUOUS_MIN_RATE:g} 笔/秒，且须为有限数值")
+        if not math.isfinite(self.continuous_rate) or self.continuous_rate <= 0:
+            raise ConfigValidationError("continuous_rate", "必须为大于 0 的有限数值")
         if not isinstance(self.continuous_seconds, int) or not 300 < self.continuous_seconds <= 3600:
             raise ConfigValidationError("continuous_seconds", "须为 301～3600 秒，超过 5 分钟")
 

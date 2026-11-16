@@ -111,7 +111,7 @@ class LogFormatter:
         if kind == "login_validation_complete":
             return [("柜台连接", f"保持={p['connection']}  非法登录请求=0  已拦截样例={p['samples']}")]
         if kind == "continuous_start":
-            return [("持续报单", f"{instrument_fields(p)}  频率={p['rate']:g}笔/秒  时长={p['seconds']}秒  计划={p['target_requests']}笔请求  每笔买开一手  LimitPrice={p['limit_price']}")]
+            return [("持续报单", f"{instrument_fields(p)}  设置频率={p['rate']:g}笔/秒  时长={p['seconds']}秒  每笔买开一手  LimitPrice={p['limit_price']}")]
         if kind in {"continuous_progress", "continuous_summary"}:
             info = (f"已运行={p['elapsed']:.1f}秒  请求={p['requests']}  委托={p['submitted']}  "
                     f"明确柜台回报={p['acknowledged']}  待核对={p['pending']}")

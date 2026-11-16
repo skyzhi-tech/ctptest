@@ -23,11 +23,6 @@ LABELS = {
     "position_error_codes": "持仓不足预期码（逗号分隔）",
     "market_error_codes": "市场状态预期码（逗号分隔）",
 }
-AUTO_PARAMETER_HELP = {
-    "timeout": "等待回报上限；超时不自动重发。",
-    "continuous_rate": "不得低于生产阈值：每秒 1 笔。",
-    "continuous_seconds": "须超过 300 秒；默认每秒一笔，持续 6 分钟。",
-}
 def configure_theme(root):
     style = ttk.Style(root)
     style.theme_use("vista" if "vista" in style.theme_names() else "default")
@@ -101,10 +96,6 @@ class Settings(tk.Toplevel):
             entry.grid(row=row, column=1, sticky="ew", pady=4)
             self.entries[name] = entry
             row += 1
-            if name in AUTO_PARAMETER_HELP:
-                ttk.Label(page, text=AUTO_PARAMETER_HELP[name], wraplength=690, style="TLabel").grid(
-                    row=row, column=0, columnspan=2, sticky="w", pady=(0, 8))
-                row += 1
 
     def toggle_advanced(self):
         if self.advanced.winfo_manager():

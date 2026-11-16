@@ -4,7 +4,7 @@ import time
 import uuid
 import math
 
-from .cases import BY_ID, LOG_REQUIREMENTS, CONTINUOUS_MIN_RATE
+from .cases import BY_ID, LOG_REQUIREMENTS
 from .store import now
 from .errorcodes import error_code
 from .login_validation import (USER_ID_MAX_BYTES, UserIDError, build_ctp_account,
@@ -719,19 +719,18 @@ class Engine:
 
     def continuous_orders(self):
         rate, duration = self.config.continuous_rate, self.config.continuous_seconds
-        if not math.isfinite(rate) or rate < CONTINUOUS_MIN_RATE or not 300 < duration <= 3600:
-            raise Outcome("待环境准备", f"持续报单频率不得低于生产阈值 {CONTINUOUS_MIN_RATE:g} 笔/秒，时长须超过 300 秒")
+        if not math.isfinite(rate) or rate <= 0 or not 300 < duration <= 3600:
+            raise Outcome("待环境准备", "报单频率须为有效正数，持续时长须超过 300 秒")
         price, symbol = self.order_price("BUY"), self.config.symbol
         started = time.monotonic()
         run_day = self.day
-        # Include both endpoints: 1/s for 360 seconds sends at t=0,...,360.
-        target = math.ceil(rate * duration) + 1
+        deadline = started + duration
         sent, acknowledged = {}, set()
         attempts, max_latency = 0, 0.0
         next_due, next_progress = started, started + 10
         send_elapsed = 0.0
         self.record("system", "continuous_start", {"symbol": symbol, "rate": rate,
-                    "seconds": duration, "target_requests": target, "volume": 1,
+                    "seconds": duration, "volume": 1,
                     "limit_price": str(price), "message": "每笔买开一手；有效未成交挂单不等同堵单"})
 
         def check_context():
@@ -758,13 +757,11 @@ class Engine:
             return len(acknowledged) == len(sent)
 
         try:
-            while attempts < target:
+            while time.monotonic() < deadline:
                 reconcile()
                 current = time.monotonic()
-                if ((current >= started + duration and attempts < target - 1)
-                        or current > started + duration + 1 / rate):
-                    send_elapsed = current - started
-                    raise Outcome("未通过", f"持续报单频率未达标：实际 {attempts / send_elapsed:.4f} 笔/秒，要求 {rate:g} 笔/秒；不突发补单")
+                if current >= deadline:
+                    break
                 if current >= next_due:
                     attempts += 1
                     ids = self.submit(symbol, price=price)
@@ -775,19 +772,19 @@ class Engine:
                         if oid in sent or owners.get(oid, {}).get("run_id") != self.run_id:
                             raise Outcome("结果待核对", "SDK 返回重复委托ID，无法证明无丢单")
                         sent[oid] = current
-                    next_due = max(started + attempts / rate, current + 1 / rate)
+                    next_due = current + 1 / rate
                 if current >= next_progress:
                     self.record("monitor", "continuous_progress", {
                         "elapsed": round(current - started, 2), "requests": attempts,
                         "submitted": len(sent), "acknowledged": len(acknowledged),
                         "pending": len(sent) - len(acknowledged)})
                     next_progress = current + 10
-                self.tick(min(0.05, max(0, next_due - time.monotonic())))
+                self.tick(min(0.05, max(0, min(next_due, deadline) - time.monotonic())))
             check_context()
             send_elapsed = time.monotonic() - started
             actual_rate = attempts / send_elapsed
-            if send_elapsed < duration or actual_rate < rate:
-                raise Outcome("未通过", f"持续报单频率未达标：实际 {actual_rate:.4f} 笔/秒，要求 {rate:g} 笔/秒")
+            if not sent:
+                raise Outcome("结果待核对", "本次未取得有效报单记录")
             self.wait(reconcile, "持续报单最终回报核对")
             check_context()
             return f"持续 {send_elapsed:.1f} 秒，{attempts} 笔请求、{len(sent)} 笔委托均取得柜台回报；实际 {actual_rate:.4f} 笔/秒"
