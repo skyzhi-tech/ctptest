@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ctptest"
 version = "0.1.0"
-description = "基于易行量化 exsdk 的开源 CTP 程序化交易测试工具，提供 Windows GUI、开平撤单、柜台错误核验和日志展示。"
+description = "基于 exsdk 的 CTP 程序化交易测试工具，提供 Windows 图形界面。"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -23,8 +23,8 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://skyzhi.com"
-Documentation = "https://github.com/skyzhi-tech/ctptest/blob/main/docs/quickstart.md"
+Homepage = "https://github.com/skyzhi-tech/ctptest"
+Documentation = "https://github.com/skyzhi-tech/ctptest#readme"
 Repository = "https://github.com/skyzhi-tech/ctptest"
 Issues = "https://github.com/skyzhi-tech/ctptest/issues"
 "exsdk Documentation" = "https://skyzhi.com/docs/overview"
