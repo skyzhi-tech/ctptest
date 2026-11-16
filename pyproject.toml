@@ -1,13 +1,33 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=77.0.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "ctptest"
 version = "0.1.0"
-description = "CTP 穿透式监管测试桌面工具"
+description = "基于易行量化 exsdk 的开源 CTP 程序化交易测试工具，提供 Windows GUI、开平撤单、柜台错误核验和日志展示。"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = ["exsdk"]
+keywords = ["CTP", "CTP testing tool", "程序化交易测试", "期货", "易行量化", "exsdk", "futures", "Python CTP SDK"]
+classifiers = [
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: User Interfaces",
+    "Natural Language :: Chinese (Simplified)",
+]
+
+[project.urls]
+Homepage = "https://skyzhi.com"
+Documentation = "https://github.com/skyzhi-tech/ctptest/blob/main/docs/quickstart.md"
+Repository = "https://github.com/skyzhi-tech/ctptest"
+Issues = "https://github.com/skyzhi-tech/ctptest/issues"
+"exsdk Documentation" = "https://skyzhi.com/docs/overview"
 
 [project.gui-scripts]
 ctptest = "ctptest.gui:main"
