@@ -11,7 +11,7 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = ["exsdk"]
-keywords = ["CTP", "CTP testing tool", "程序化交易测试", "期货", "易行量化", "exsdk", "futures", "Python CTP SDK"]
+keywords = ["CTP", "CTP testing tool", "程序化交易测试", "期货", "exsdk", "futures", "Python CTP SDK"]
 classifiers = [
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",

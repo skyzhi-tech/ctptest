@@ -1,2 +1,2 @@
-include README.md LICENSE requirements.txt config.example.toml ACCEPTANCE.md
+include README.md LICENSE requirements.txt config.example.toml
 recursive-include assets *.png
