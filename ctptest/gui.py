@@ -12,7 +12,7 @@ from .cases import BY_ID, CASES
 from .config import Config, ConfigValidationError, FIELD_LABELS, SECRETS, load_config, load_secrets, save_config
 from .worker import Worker
 from .timeutil import now
-from .logformat import format_events
+from .logformat import LogFormatter, format_events
 
 
 LABELS = {
@@ -25,6 +25,8 @@ LABELS = {
 }
 AUTO_PARAMETER_HELP = {
     "timeout": "等待回报上限；超时不自动重发。",
+    "continuous_rate": "不得低于生产阈值：每秒 1 笔。",
+    "continuous_seconds": "须超过 300 秒；默认每秒一笔，持续 6 分钟。",
 }
 def configure_theme(root):
     style = ttk.Style(root)
@@ -70,7 +72,7 @@ class Settings(tk.Toplevel):
         self.advanced_button.grid(row=5, column=0, columnspan=2, sticky="w")
         self.advanced = ttk.Frame(page, padding=(0, 8, 0, 0))
         self.advanced.columnconfigure(1, weight=1)
-        self.add_fields(self.advanced, ["timeout"])
+        self.add_fields(self.advanced, ["timeout", "continuous_rate", "continuous_seconds"])
         # Error tests reuse the main symbol; specialized TOML values remain optional.
         bar = ttk.Frame(self, padding=(20, 12))
         bar.grid(row=2, column=0, sticky="ew")
@@ -118,7 +120,9 @@ class Settings(tk.Toplevel):
             for field in fields(Config):
                 if field.name not in self.vars:
                     continue
-                value = self.vars[field.name].get().strip()
+                value = self.vars[field.name].get()
+                if field.name != "user_id":
+                    value = value.strip()
                 if field.type in (int, float):
                     try:
                         value = field.type(value)
@@ -516,6 +520,7 @@ class Application:
         self.tree.item(str(case_id), tags=(status,))
 
     def replace_text(self, value):
+        self._log_render = None
         if self.selected is not None or value:
             self.empty_label.grid_remove()
             self.records_frame.grid()
@@ -539,13 +544,36 @@ class Application:
             self.replace_text(format_events(self.runtime_events))
 
     def render_events(self, run_id):
-        events = list(self.event_cache.get(run_id, []))
+        events = self.event_cache.setdefault(run_id, [])
         run = self.run_cache.get(run_id)
-        if run and run.get("status") not in {"执行中", "等待成交", "等待回报"} and not any(e["kind"] == "test_result" for e in events):
-            events.append({"at": run.get("ended") or "", "run_id": run_id,
-                           "kind": "test_result", "payload": {"status": run["status"],
-                                                               "summary": run.get("summary") or ""}})
-        self.replace_text(format_events(events))
+        rendered = getattr(self, "_log_render", None)
+        if (not rendered or rendered["run_id"] != run_id or rendered["events"] is not events
+                or rendered["count"] > len(events) or rendered["synthetic"]):
+            self.replace_text("")
+            rendered = {"run_id": run_id, "events": events, "count": 0, "formatter": LogFormatter(),
+                        "has_result": False, "synthetic": False}
+            self._log_render = rendered
+        lines = []
+        for event in events[rendered["count"]:]:
+            line = rendered["formatter"].format_event(event)
+            if line:
+                lines.append(line)
+            rendered["has_result"] |= event["kind"] == "test_result"
+        rendered["count"] = len(events)
+        if (run and run.get("status") not in {"执行中", "等待成交", "等待回报"}
+                and not rendered["has_result"]):
+            line = rendered["formatter"].format_event({"at": run.get("ended") or "", "run_id": run_id,
+                       "kind": "test_result", "payload": {"status": run["status"],
+                                                           "summary": run.get("summary") or ""}})
+            if line:
+                lines.append(line)
+            rendered["synthetic"] = True
+        if lines:
+            self.text.configure(state="normal")
+            if self.text.index("end-1c") != "1.0":
+                self.text.insert("end", "\n")
+            self.text.insert("end", "\n".join(lines))
+            self.text.configure(state="disabled")
         if run_id == self.active_run:
             self.text.see("end")
 

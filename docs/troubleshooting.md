@@ -22,6 +22,14 @@ Token 请通过 [易行量化官网](https://skyzhi.com/login?utm_source=github&
 
 SDK 数据由持续更新的快照读取，可能略过中间状态。日志里的 CTP 相关字段仅展示实际取得的值，不声称保存了每一次原始 CTP 回调。需要逐条原始回调审计时，须由 SDK 提供相应有序事件能力。
 
+## UserID 非法输入与持续报单
+
+新增登录参数测试只选择 UserID，使用实际创建 SDK 账号之前的共享校验，非法输入不会发送柜台，也不修改已保存账号。工具的 UserID 字符策略为 ASCII 字母数字，密码不受此字符策略限制。
+
+长度按 CTP `TThostFtdcUserIDType` 的 `char[16]` 保留一个终止符，最多 15 字节；[CTP 头文件定义](https://github.com/vnpy/vnpy_ctp/blob/main/vnpy_ctp/api/include/ctp/ThostFtdcUserApiDataType.h) 供核对。字符白名单是客户端策略，不声称所有柜台采用同一字符规范。
+
+持续报单默认 1 笔/秒、360 秒。频率不足时停止并记录，不通过结束后密集补单算达标。正常未成交挂单不是堵单；缺少明确回报须待核对。停止不会撤销已发主委托，已开始的 SDK 同步调用须等待返回。
+
 ## CTP 错误码如何核验
 
 当前适配读取文本中明确标注为 `错误码`、`ErrorID`、`error_code` 或 `返回码` 的整数，支持冒号、等号及空格等分隔。保留完整原文；没有明确标签、多个码值冲突或格式无法识别时，不从文字推导码值。

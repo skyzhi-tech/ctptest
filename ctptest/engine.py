@@ -1,11 +1,14 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
 import time
 import uuid
+import math
 
-from .cases import BY_ID, LOG_REQUIREMENTS
+from .cases import BY_ID, LOG_REQUIREMENTS, CONTINUOUS_MIN_RATE
 from .store import now
 from .errorcodes import error_code
+from .login_validation import (USER_ID_MAX_BYTES, UserIDError, build_ctp_account,
+                               invalid_user_ids, validate_user_id)
 
 
 TERMINAL = {"FILLED", "CANCELLED", "REJECTED"}
@@ -112,11 +115,11 @@ class Engine:
             return self.record(category, kind, payload, dedupe, run_id, case_id, day)
         self.emit("event", event)
 
-    def tick(self):
+    def tick(self, seconds=0.2):
         if self.sdk_failure is not None:
             raise self.sdk_failure
         try:
-            new = self.adapter.poll(0.2)
+            new = self.adapter.poll(seconds)
         except Exception as error:
             self.sdk_failure = SdkFailure(error)
             old_status = self.state["status"]
@@ -562,6 +565,8 @@ class Engine:
     def perform(self, case_id):
         if case_id in LOG_REQUIREMENTS:
             return self.log_case(case_id)
+        if case_id in (34, 35, 36, 37):
+            return self.login_input_case(case_id)
         if case_id in (0, 4):
             self.record("system", "login_context", {
                 "environment": self.config.environment, "front_url": self.config.front_url,
@@ -595,6 +600,8 @@ class Engine:
             return
         self.require_ready()
         symbol = self.config.symbol
+        if case_id == 33:
+            return self.continuous_orders()
         if case_id == 1:
             buy_price, sell_price = self.order_price("BUY"), self.order_price("SELL")
             ids = self.submit(symbol, direction="BUY", price=buy_price)
@@ -675,6 +682,126 @@ class Engine:
             self.await_orders(self.submit(symbol, price=self.order_price(), auxiliary=True), passive=True)
         elif case_id in (21, 22, 23):
             return self.counter_case(case_id)
+
+    def login_input_case(self, case_id):
+        reason, samples = invalid_user_ids(case_id)
+        self.record("system", "login_validation_rule", {
+            "operation": "ReqUserLogin", "field": "UserID", "max_bytes": USER_ID_MAX_BYTES,
+            "validator": "ctptest/login_validation.py:validate_user_id",
+            "connection": self.state["status"], "sent_to_counter": False})
+        if case_id == 37:
+            validate_user_id("A" * USER_ID_MAX_BYTES)
+            self.record("system", "login_boundary", {"bytes": USER_ID_MAX_BYTES, "valid": True})
+        for sample in samples:
+            self.check_stop()
+            called = False
+            def must_not_construct(**_params):
+                nonlocal called
+                called = True
+            try:
+                # Exercise the very same gate used by ExsdkAdapter before any SDK account creation.
+                build_ctp_account(replace(self.config, user_id=sample),
+                                  {"password": "", "auth_code": ""}, must_not_construct)
+            except UserIDError as error:
+                blocked = error.reason == reason and not called
+                message = str(error)
+            else:
+                blocked, message = False, "非法输入未被预期规则拦截"
+            self.record("error", "login_input_checked", {
+                "operation": "ReqUserLogin", "field": "UserID", "input": ascii(sample),
+                "bytes": len(sample.encode("utf-8")), "reason": reason, "blocked": blocked,
+                "account_factory_called": called, "sent_to_counter": False, "message": message})
+            if not blocked:
+                raise Outcome("未通过", message)
+        self.record("system", "login_validation_complete", {"samples": len(samples),
+                    "connection": self.state["status"], "sent_to_counter": False})
+        return f"UserID {len(samples)} 组输入全部由实际登录入口拦截；未发送柜台"
+
+    def continuous_orders(self):
+        rate, duration = self.config.continuous_rate, self.config.continuous_seconds
+        if not math.isfinite(rate) or rate < CONTINUOUS_MIN_RATE or not 300 < duration <= 3600:
+            raise Outcome("待环境准备", f"持续报单频率不得低于生产阈值 {CONTINUOUS_MIN_RATE:g} 笔/秒，时长须超过 300 秒")
+        price, symbol = self.order_price("BUY"), self.config.symbol
+        started = time.monotonic()
+        run_day = self.day
+        # Include both endpoints: 1/s for 360 seconds sends at t=0,...,360.
+        target = math.ceil(rate * duration) + 1
+        sent, acknowledged = {}, set()
+        attempts, max_latency = 0, 0.0
+        next_due, next_progress = started, started + 10
+        send_elapsed = 0.0
+        self.record("system", "continuous_start", {"symbol": symbol, "rate": rate,
+                    "seconds": duration, "target_requests": target, "volume": 1,
+                    "limit_price": str(price), "message": "每笔买开一手；有效未成交挂单不等同堵单"})
+
+        def check_context():
+            self.require_ready()
+            if self.day != run_day:
+                raise Outcome("结果待核对", "持续报单期间交易日变化，停止后续报单")
+
+        def reconcile():
+            nonlocal max_latency
+            check_context()
+            current = time.monotonic()
+            for oid, submitted_at in sent.items():
+                order = self.state.get("orders", {}).get(oid, {})
+                if order.get("status") == "REJECTED":
+                    raise Outcome("未通过", "持续报单收到柜台拒绝：" + str(order.get("status_msg")))
+                if oid in acknowledged:
+                    continue
+                if (order.get("status") in {"ALIVE", "FILLED", "CANCELLED"}
+                        and order.get("order_sys_id")):
+                    acknowledged.add(oid)
+                    max_latency = max(max_latency, current - submitted_at)
+                elif current - submitted_at >= self.config.timeout:
+                    raise Outcome("结果待核对", f"委托 {oid} 未取得明确柜台回报，存在丢单或堵单待核对；停止继续报单")
+            return len(acknowledged) == len(sent)
+
+        try:
+            while attempts < target:
+                reconcile()
+                current = time.monotonic()
+                if ((current >= started + duration and attempts < target - 1)
+                        or current > started + duration + 1 / rate):
+                    send_elapsed = current - started
+                    raise Outcome("未通过", f"持续报单频率未达标：实际 {attempts / send_elapsed:.4f} 笔/秒，要求 {rate:g} 笔/秒；不突发补单")
+                if current >= next_due:
+                    attempts += 1
+                    ids = self.submit(symbol, price=price)
+                    if not ids:
+                        raise Outcome("结果待核对", "持续报单缺少委托ID，停止继续报单")
+                    owners = self.store.owners(run_day)
+                    for oid in ids:
+                        if oid in sent or owners.get(oid, {}).get("run_id") != self.run_id:
+                            raise Outcome("结果待核对", "SDK 返回重复委托ID，无法证明无丢单")
+                        sent[oid] = current
+                    next_due = max(started + attempts / rate, current + 1 / rate)
+                if current >= next_progress:
+                    self.record("monitor", "continuous_progress", {
+                        "elapsed": round(current - started, 2), "requests": attempts,
+                        "submitted": len(sent), "acknowledged": len(acknowledged),
+                        "pending": len(sent) - len(acknowledged)})
+                    next_progress = current + 10
+                self.tick(min(0.05, max(0, next_due - time.monotonic())))
+            check_context()
+            send_elapsed = time.monotonic() - started
+            actual_rate = attempts / send_elapsed
+            if send_elapsed < duration or actual_rate < rate:
+                raise Outcome("未通过", f"持续报单频率未达标：实际 {actual_rate:.4f} 笔/秒，要求 {rate:g} 笔/秒")
+            self.wait(reconcile, "持续报单最终回报核对")
+            check_context()
+            return f"持续 {send_elapsed:.1f} 秒，{attempts} 笔请求、{len(sent)} 笔委托均取得柜台回报；实际 {actual_rate:.4f} 笔/秒"
+        finally:
+            if not send_elapsed:
+                send_elapsed = time.monotonic() - started
+            owners = {oid for oid, owner in self.store.owners(run_day).items() if owner["run_id"] == self.run_id}
+            self.record("monitor", "continuous_summary", {
+                "elapsed": round(time.monotonic() - started, 2), "send_elapsed": round(send_elapsed, 2),
+                "requests": attempts, "submitted": len(owners), "acknowledged": len(acknowledged),
+                "pending": len(owners - acknowledged), "max_latency": round(max_latency, 3),
+                "day": run_day, "unconfirmed_order_ids": sorted(owners - acknowledged),
+                "rate": round(attempts / send_elapsed, 4) if send_elapsed else None,
+                "message": "已发委托保留，后续回报继续记录；未自动撤销或平仓"})
 
     def counter_case(self, case_id):
         prefix = {21: "funds", 22: "position", 23: "market"}[case_id]

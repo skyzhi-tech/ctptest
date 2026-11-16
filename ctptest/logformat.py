@@ -101,6 +101,25 @@ class LogFormatter:
                                 ("price", "Price"), ("volume", "Volume")))))))]
         if kind == "local_reject":
             return [("本地拒绝", message)]
+        if kind == "login_validation_rule":
+            return [("登录参数检查", f"{p['operation']}  UserID  上限={p['max_bytes']}字节  校验入口={p['validator']}")]
+        if kind == "login_boundary":
+            return [("合法边界", f"UserID={p['bytes']}字节，本地校验允许；未发送柜台")]
+        if kind == "login_input_checked":
+            return [("客户端拦截" if p.get("blocked") else "拦截失败",
+                     f"UserID={p['input']}  字节数={p['bytes']}  {message}  未发送柜台")]
+        if kind == "login_validation_complete":
+            return [("柜台连接", f"保持={p['connection']}  非法登录请求=0  已拦截样例={p['samples']}")]
+        if kind == "continuous_start":
+            return [("持续报单", f"{instrument_fields(p)}  频率={p['rate']:g}笔/秒  时长={p['seconds']}秒  计划={p['target_requests']}笔请求  每笔买开一手  LimitPrice={p['limit_price']}")]
+        if kind in {"continuous_progress", "continuous_summary"}:
+            info = (f"已运行={p['elapsed']:.1f}秒  请求={p['requests']}  委托={p['submitted']}  "
+                    f"明确柜台回报={p['acknowledged']}  待核对={p['pending']}")
+            if kind == "continuous_summary":
+                if p.get("rate") is not None:
+                    info += f"  实际频率={p['rate']:.4f}笔/秒"
+                info += f"  最大回报等待={p['max_latency']:.3f}秒  {message}"
+            return [("持续报单汇总" if kind == "continuous_summary" else "持续报单进度", info)]
         if kind == "counter_error":
             return [("柜台错误", "  ".join(filter(None, (order_identity(oid),
                     fields(p, (("error_code", "ErrorID"),)), text(p.get("error_message"))))))]
@@ -175,7 +194,9 @@ class LogFormatter:
             result = [(label, summary)]
             resources = p.get("resources") or {}
             if resources.get("未完成委托"):
-                result.append(("未完成委托", "、".join(map(str, resources["未完成委托"]))))
+                orders = resources["未完成委托"]
+                info = "、".join(map(str, orders[:5])) + f" 等 {len(orders)} 笔" if len(orders) > 5 else "、".join(map(str, orders))
+                result.append(("未完成委托", info))
             return result
         if kind == "sdk_limitation":
             return [("SDK", text(p.get("missing")))]

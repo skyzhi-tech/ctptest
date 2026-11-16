@@ -14,6 +14,8 @@ class Store:
         self.session_id = session_id or uuid.uuid4().hex
         self.secrets = [s for s in secrets if s]
         self.log_formatter = LogFormatter()
+        self._counts = {}
+        self._owners = {}
         self.db = sqlite3.connect(self.directory / "ctptest.sqlite3")
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
@@ -86,6 +88,11 @@ class Store:
                 "(scope,day,at,run_id,case_id,category,kind,payload,dedupe) VALUES (?,?,?,?,?,?,?,?,?)",
                 (self.scope, day, event["at"], run_id, case_id, category, kind, text, dedupe))
         if cursor.rowcount:
+            if kind in {"order_submitted", "cancel_submitted"}:
+                key = (day, kind.removesuffix("_submitted"))
+                if key in self._counts:
+                    total, unknown = self._counts[key]
+                    self._counts[key] = (total + 1, unknown + (event["payload"].get("status") == "UNKNOWN"))
             line = self.log_formatter.format_event(event)
             if line:
                 with (self.directory / "ctptest.log").open("a", encoding="utf-8") as stream:
@@ -93,10 +100,14 @@ class Store:
         return event
 
     def count(self, day, kind):
+        if (day, kind) in self._counts:
+            return self._counts[day, kind]
         rows = self.db.execute("SELECT payload FROM events WHERE scope=? AND day=? AND kind=?",
                                (self.scope, day, f"{kind}_submitted"))
         data = [json.loads(row[0]) for row in rows]
-        return len(data), sum(item.get("status") == "UNKNOWN" for item in data)
+        value = len(data), sum(item.get("status") == "UNKNOWN" for item in data)
+        self._counts[day, kind] = value
+        return value
 
     def get(self, key, default=None):
         row = self.db.execute("SELECT value FROM settings WHERE scope=? AND key=?", (self.scope, key)).fetchone()
@@ -109,12 +120,17 @@ class Store:
 
     def own(self, day, order_id, request_id, run_id, symbol):
         with self.db:
-            self.db.execute("INSERT OR IGNORE INTO owned VALUES (?,?,?,?,?,?)",
+            cursor = self.db.execute("INSERT OR IGNORE INTO owned VALUES (?,?,?,?,?,?)",
                             (self.scope, day, order_id, request_id, run_id, symbol))
+        if cursor.rowcount and day in self._owners:
+            self._owners[day][order_id] = dict(scope=self.scope, day=day, order_id=order_id,
+                                             request_id=request_id, run_id=run_id, symbol=symbol)
 
     def owners(self, day):
-        return {row["order_id"]: dict(row) for row in self.db.execute(
-            "SELECT * FROM owned WHERE scope=? AND day=?", (self.scope, day))}
+        if day not in self._owners:
+            self._owners[day] = {row["order_id"]: dict(row) for row in self.db.execute(
+                "SELECT * FROM owned WHERE scope=? AND day=?", (self.scope, day))}
+        return self._owners[day]
 
     def history(self, limit=200):
         return [dict(r) for r in self.db.execute(

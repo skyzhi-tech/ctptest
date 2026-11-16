@@ -9,18 +9,21 @@ import os
 from pathlib import Path
 import tomllib
 import uuid
+from .login_validation import UserIDError, validate_user_id
+from .cases import CONTINUOUS_MIN_RATE
 
 
 SECRETS = ("token", "password", "auth_code")
 TEST_FIELDS = ("symbol", "funds_symbol", "position_symbol", "market_symbol", "funds_volume",
                "buy_price", "sell_price", "timeout", "funds_error_codes",
-               "position_error_codes", "market_error_codes")
+               "position_error_codes", "market_error_codes", "continuous_rate", "continuous_seconds")
 FIELD_LABELS = {
     "environment": "测试环境", "front_url": "交易前置地址", "broker_id": "BrokerID",
     "user_id": "UserID", "app_id": "AppID", "symbol": "主测试合约", "log_dir": "日志目录",
     "password": "Password", "auth_code": "AuthCode", "token": "exsdk Token",
     "funds_volume": "资金不足委托手数", "buy_price": "买入价", "sell_price": "卖出价",
     "timeout": "回报等待期限（秒）",
+    "continuous_rate": "持续报单频率（笔/秒）", "continuous_seconds": "持续报单时长（秒）",
 }
 
 
@@ -85,6 +88,8 @@ class Config:
     buy_price: str = ""
     sell_price: str = ""
     timeout: float = 60
+    continuous_rate: float = 1
+    continuous_seconds: int = 360
     log_dir: str = "data"
     funds_error_codes: str = ""
     position_error_codes: str = ""
@@ -107,6 +112,10 @@ class Config:
         return tuple(getattr(self, item.name) for item in fields(self) if item.name not in TEST_FIELDS)
 
     def validate(self):
+        try:
+            validate_user_id(self.user_id)
+        except UserIDError as error:
+            raise ConfigValidationError("user_id", str(error).removeprefix("UserID ")) from error
         for name in ("environment", "front_url", "broker_id", "user_id", "app_id", "symbol", "log_dir"):
             if not str(getattr(self, name)).strip():
                 raise ConfigValidationError(name, "不能为空")
@@ -130,6 +139,10 @@ class Config:
         for name, maximum in (("timeout", 600),):
             if not 1 <= getattr(self, name) <= maximum:
                 raise ConfigValidationError(name, f"须为 1～{maximum} 秒")
+        if not math.isfinite(self.continuous_rate) or self.continuous_rate < CONTINUOUS_MIN_RATE:
+            raise ConfigValidationError("continuous_rate", f"不得低于生产阈值 {CONTINUOUS_MIN_RATE:g} 笔/秒，且须为有限数值")
+        if not isinstance(self.continuous_seconds, int) or not 300 < self.continuous_seconds <= 3600:
+            raise ConfigValidationError("continuous_seconds", "须为 301～3600 秒，超过 5 分钟")
 
 
 def load_config(path):

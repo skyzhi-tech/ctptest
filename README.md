@@ -22,9 +22,11 @@ ctptest is an open-source Python CTP testing tool for futures trading. Built wit
 | CTP 开平撤单 | 买开／卖开各一手，直接卖平／买平各一手，单笔撤单 |
 | 统计与控制 | 报撤单计数、阈值预警、暂停与恢复交易入口 |
 | 指令与柜台错误 | 合约／价位／手数本地拦截，资金不足、持仓不足、市场状态错误核验 |
+| 登录参数检查 | UserID 空值／空白、ASCII 控制字符、特殊符号及超长输入的客户端拦截 |
+| 接入安全性 | 默认每秒一笔、持续 6 分钟报单，核对逐笔回报与实际频率 |
 | 测试证据 | 交易、系统、监测与错误日志，CTP 相关字段及上海时间 |
 
-共内置 **24 个测试点**，完整操作、条件及截图要求见 [CTP 程序化交易测试指南](docs/ctp-testing.md)。
+共内置 **29 个测试点**，完整操作、条件及截图要求见 [CTP 程序化交易测试指南](docs/ctp-testing.md)。
 
 ## 快速运行
 
@@ -63,7 +65,7 @@ python -m venv .venv
 ## 文档与常见问题
 
 - [快速开始](docs/quickstart.md)：安装、Token、配置与首次测试。
-- [CTP 程序化交易测试指南](docs/ctp-testing.md)：24 个测试点、前置条件及截图证据。
+- [CTP 程序化交易测试指南](docs/ctp-testing.md)：29 个测试点、前置条件及截图证据。
 - [常见错误与 SDK 边界](docs/troubleshooting.md)：本地拒绝、柜台错误码、等待回报及 SDK 限制。
 - [真实柜台验收检查表](ACCEPTANCE.md)：逐项记录实际验收情况。
 
@@ -71,7 +73,13 @@ python -m venv .venv
 
 欢迎在 [GitHub Issues](https://github.com/skyzhi-tech/ctptest/issues) 反馈问题或提交 Pull Request。请说明系统、Python／exsdk 版本、复现步骤和脱敏后的相关回报，不要上传密码、Token、AuthCode、账号配置或原始数据库。
 
-修改交易流程时，请使用 SDK 替身或专用仿真环境验证提交、回报关联及失败路径。替身结果与真实柜台验收分别记录；当前仓库不提供可复现的完整自动化测试套件。
+新增测试可在 Windows 桌面环境中执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -v
+```
+
+当前测试覆盖新增登录参数检查、持续报单、停止与失败路径、计数恢复、增量日志及部分既有交易回归，使用 SDK 替身和模拟时钟，不连接柜台。模拟时钟中的 6 分钟不代表已完成真实环境持续报单；其他既有功能仍需补充验证。替身结果与真实柜台验收分别记录。
 
 仓库管理员可参考 [开源发布与 GitHub About 设置](docs/publishing.md) 完成项目展示。
 

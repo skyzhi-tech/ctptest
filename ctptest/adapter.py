@@ -2,6 +2,7 @@
 from dataclasses import asdict, is_dataclass
 import threading
 import time
+from .login_validation import build_ctp_account
 
 
 def snapshot(obj):
@@ -22,9 +23,7 @@ class ExsdkAdapter:
         from exsdk import ExApi, CtpAccount
         self.thread = threading.get_ident()
         self.errors = []
-        account = CtpAccount(broker_id=config.broker_id, user_id=config.user_id,
-                             password=secrets["password"], front_url=config.front_url,
-                             app_id=config.app_id, auth_code=secrets["auth_code"])
+        account = build_ctp_account(config, secrets, CtpAccount)
         self.api = ExApi(token=secrets["token"], account=account)
         try:
             self.watches = {"account": self.api.watch_account(), "positions": self.api.watch_position(),

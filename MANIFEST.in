@@ -1,2 +1,3 @@
 include README.md LICENSE requirements.txt config.example.toml ACCEPTANCE.md SDK_LIMITATIONS.md
 recursive-include docs *.md
+recursive-include tests *.py
