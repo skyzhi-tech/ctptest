@@ -73,13 +73,7 @@ python -m venv .venv
 
 欢迎在 [GitHub Issues](https://github.com/skyzhi-tech/ctptest/issues) 反馈问题或提交 Pull Request。请说明系统、Python／exsdk 版本、复现步骤和脱敏后的相关回报，不要上传密码、Token、AuthCode、账号配置或原始数据库。
 
-新增测试可在 Windows 桌面环境中执行：
-
-```powershell
-.\.venv\Scripts\python.exe -m unittest discover -v
-```
-
-当前测试覆盖新增登录参数检查、持续报单、停止与失败路径、计数恢复、增量日志及部分既有交易回归，使用 SDK 替身和模拟时钟，不连接柜台。模拟时钟中的 6 分钟不代表已完成真实环境持续报单；其他既有功能仍需补充验证。替身结果与真实柜台验收分别记录。
+修改交易流程时，应使用 SDK 替身和模拟时钟验证登录参数检查、持续报单、停止与失败路径、计数恢复及 GUI 响应，再在专用仿真环境核对真实回报。当前仓库不包含可直接运行的自动化测试套件；模拟时钟中的 6 分钟不能作为真实持续报单验收证据。替身结果与真实柜台验收分别记录。
 
 仓库管理员可参考 [开源发布与 GitHub About 设置](docs/publishing.md) 完成项目展示。
 

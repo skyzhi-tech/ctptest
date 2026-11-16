@@ -24,7 +24,7 @@ SDK 数据由持续更新的快照读取，可能略过中间状态。日志里�
 
 ## UserID 非法输入与持续报单
 
-新增登录参数测试只选择 UserID，使用实际创建 SDK 账号之前的共享校验，非法输入不会发送柜台，也不修改已保存账号。工具的 UserID 字符策略为 ASCII 字母数字，密码不受此字符策略限制。
+新增登录参数测试只选择 UserID，使用实际创建 SDK 账号之前的共享校验，非法输入不会发送柜台，也不修改已保存账号。GUI 保存按原样校验 UserID，不先去掉首尾空白或控制字符。工具的 UserID 字符策略为 ASCII 字母数字，密码不受此字符策略限制。
 
 长度按 CTP `TThostFtdcUserIDType` 的 `char[16]` 保留一个终止符，最多 15 字节；[CTP 头文件定义](https://github.com/vnpy/vnpy_ctp/blob/main/vnpy_ctp/api/include/ctp/ThostFtdcUserApiDataType.h) 供核对。字符白名单是客户端策略，不声称所有柜台采用同一字符规范。
 
