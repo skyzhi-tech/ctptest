@@ -571,7 +571,7 @@ class Engine:
             self.record("system", "login_context", {
                 "environment": self.config.environment, "front_url": self.config.front_url,
                 "broker_id": self.config.broker_id, "user_id": self.config.user_id,
-                "app_id": self.config.app_id})
+                "app_id": self.config.app_id, "is_production_mode": self.config.is_production_mode})
             self.wait(lambda: self.state["status"] == "READY" and bool(self.day), "等待登录同步")
             self.record("trade", "login_verified", {"status": "READY", "day": self.day,
                         "account": dict(self.state.get("account", {})),

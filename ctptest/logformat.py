@@ -139,8 +139,11 @@ class LogFormatter:
             current = CONNECTION_STATES.get(status, text(status))
             return [("交易连接", f"{CONNECTION_STATES.get(before, text(before))} → {current}" if before else current)]
         if kind == "login_context":
-            return [("CTP账户", fields(p, (("broker_id", "BrokerID"), ("user_id", "UserID"), ("app_id", "AppID")))),
-                    ("交易前置", text(p.get("front_url")))]
+            result = [("CTP账户", fields(p, (("broker_id", "BrokerID"), ("user_id", "UserID"), ("app_id", "AppID")))),
+                      ("交易前置", text(p.get("front_url")))]
+            if "is_production_mode" in p:
+                result.append(("CTP版本", "生产版本" if p["is_production_mode"] else "测评版本"))
+            return result
         if kind == "login_verified":
             account = p.get("account") or {}
             state = "登录及同步完成" if p.get("status") == "READY" else CONNECTION_STATES.get(p.get("status"), text(p.get("status")))

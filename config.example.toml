@@ -2,6 +2,8 @@
 # Token/password/AuthCode are NEVER stored here. Save via the GUI to create a
 # versioned credential_ref in Windows Credential Manager.
 environment = "仿真期货"
+# CTP API: true = 生产版本，false = 测评版本；切换后需重新连接。
+is_production_mode = true
 broker_id = ""
 user_id = ""
 front_url = "tcp://TEST-TRADING-FRONT:PORT"

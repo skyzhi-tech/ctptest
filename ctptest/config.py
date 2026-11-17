@@ -21,7 +21,7 @@ FIELD_LABELS = {
     "user_id": "UserID", "app_id": "AppID", "symbol": "主测试合约", "log_dir": "日志目录",
     "password": "Password", "auth_code": "AuthCode", "token": "exsdk Token",
     "funds_volume": "资金不足委托手数", "buy_price": "买入价", "sell_price": "卖出价",
-    "timeout": "回报等待期限（秒）",
+    "timeout": "回报等待期限（秒）", "is_production_mode": "CTP 版本",
     "continuous_rate": "持续报单频率（笔/秒）", "continuous_seconds": "持续报单时长（秒）",
 }
 
@@ -94,6 +94,7 @@ class Config:
     position_error_codes: str = ""
     market_error_codes: str = ""
     credential_ref: str = ""
+    is_production_mode: bool = True
 
     @property
     def scope(self):
@@ -111,6 +112,8 @@ class Config:
         return tuple(getattr(self, item.name) for item in fields(self) if item.name not in TEST_FIELDS)
 
     def validate(self):
+        if not isinstance(self.is_production_mode, bool):
+            raise ConfigValidationError("is_production_mode", "必须为 true（生产版本）或 false（测评版本）")
         try:
             validate_user_id(self.user_id)
         except UserIDError as error:

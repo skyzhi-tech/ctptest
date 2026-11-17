@@ -23,6 +23,9 @@ LABELS = {
     "position_error_codes": "持仓不足预期码（逗号分隔）",
     "market_error_codes": "市场状态预期码（逗号分隔）",
 }
+CTP_MODES = {"生产版本": True, "测评版本": False}
+
+
 def configure_theme(root):
     style = ttk.Style(root)
     style.theme_use("vista" if "vista" in style.theme_names() else "default")
@@ -57,7 +60,7 @@ class Settings(tk.Toplevel):
             page.columnconfigure(1, weight=1)
             pages[name] = page
         account = pages["账号与连接"]
-        self.add_fields(account, ["environment", "front_url", "broker_id", "user_id",
+        self.add_fields(account, ["environment", "is_production_mode", "front_url", "broker_id", "user_id",
                                   "password", "app_id", "auth_code", "token"])
         page = pages["测试场景"]
         self.add_fields(page, ["symbol", "buy_price", "sell_price", "funds_volume"])
@@ -89,10 +92,15 @@ class Settings(tk.Toplevel):
         row = 0
         for name in names:
             value = self.secrets.get(name, "") if name in SECRETS else getattr(self.app.config, name)
+            if name == "is_production_mode":
+                value = "生产版本" if value else "测评版本"
             var = tk.StringVar(value=str(value))
             self.vars[name] = var
             ttk.Label(page, text=LABELS[name], style="TLabel").grid(row=row, column=0, sticky="w", pady=4, padx=(0, 16))
-            entry = ttk.Entry(page, textvariable=var, show="●" if name in SECRETS else "")
+            if name == "is_production_mode":
+                entry = ttk.Combobox(page, textvariable=var, values=tuple(CTP_MODES), state="readonly")
+            else:
+                entry = ttk.Entry(page, textvariable=var, show="●" if name in SECRETS else "")
             entry.grid(row=row, column=1, sticky="ew", pady=4)
             self.entries[name] = entry
             row += 1
@@ -112,6 +120,11 @@ class Settings(tk.Toplevel):
                 if field.name not in self.vars:
                     continue
                 value = self.vars[field.name].get()
+                if field.name == "is_production_mode":
+                    if value not in CTP_MODES:
+                        raise ConfigValidationError(field.name, "请选择生产版本或测评版本")
+                    setattr(config, field.name, CTP_MODES[value])
+                    continue
                 if field.name != "user_id":
                     value = value.strip()
                 if field.type in (int, float):

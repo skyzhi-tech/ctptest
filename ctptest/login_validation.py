@@ -30,7 +30,8 @@ def build_ctp_account(config, secrets, account_factory):
     validate_user_id(config.user_id)
     return account_factory(broker_id=config.broker_id, user_id=config.user_id,
                            password=secrets["password"], front_url=config.front_url,
-                           app_id=config.app_id, auth_code=secrets["auth_code"])
+                           app_id=config.app_id, auth_code=secrets["auth_code"],
+                           is_production_mode=config.is_production_mode)
 
 
 def invalid_user_ids(case_id):
